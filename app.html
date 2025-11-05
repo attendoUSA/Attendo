@@ -100,16 +100,17 @@ connector = Connector(credentials=credentials)   # ✅ the only connector defini
  
  
  def getconn() -> pymysql.connections.Connection:
- """Create database connection to Cloud SQL"""
- conn = connector.connect(
- os.getenv("INSTANCE_CONNECTION_NAME"),
- "pymysql",
- user=os.getenv("DB_USER"),
- password=os.getenv("DB_PASS"),
- db=os.getenv("DB_NAME"),
- )
- return conn
- 
+    return connector.connect(
+        os.getenv("INSTANCE_CONNECTION_NAME"),
+        "pymysql",
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASS"),
+        db=os.getenv("DB_NAME"),
+    )
+
+engine = create_engine("mysql+pymysql://", creator=getconn)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
  
  # Create SQLAlchemy engine using Cloud SQL connector
  engine = create_engine(
