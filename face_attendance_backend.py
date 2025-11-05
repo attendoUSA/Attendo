@@ -38,7 +38,6 @@ import pymysql
 credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
 
-connector = Connector(credentials=credentials)
 
 # ============= CONFIGURATION =============
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -98,13 +97,14 @@ connector = Connector()
 def getconn() -> pymysql.connections.Connection:
     """Create database connection to Cloud SQL"""
     conn = connector.connect(
-        INSTANCE_CONNECTION_NAME,
+        os.getenv("INSTANCE_CONNECTION_NAME"),
         "pymysql",
-        user=DB_USER,
-        password=DB_PASS,
-        db=DB_NAME
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASS"),
+        db=os.getenv("DB_NAME"),
     )
     return conn
+
 
 # Create SQLAlchemy engine using Cloud SQL connector
 engine = create_engine(
