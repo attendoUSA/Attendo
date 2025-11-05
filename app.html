@@ -1,753 +1,863 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Attendo Attendance System</title>
+  <link rel="stylesheet" href="style.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+</head>
+<body class="home-bg">
+  <header>
+    <div class="header-brand">
+      <img src="assets/logo.png" class="header-logo" alt="VeriFace logo"/>
+      <div class="logo">Attendo</div>
+    </div>
+    <nav>
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="app.html" class="active">Login</a></li>
+        <li><a href="contact.html">Contact</a></li>
+      </ul>
+      <span class="user-tag hidden" id="authTag">Welcome</span>
+      <button class="logout-btn hidden" id="btnLogout">Logout</button>
+      <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+        <span class="theme-icon">🌙</span>
+      </button>
+    </nav>
+  </header>
 
-from datetime import datetime, timedelta
-from typing import Optional, List
-from collections import defaultdict
-import os, json, secrets, string
+  <div class="app-container">
+    <!-- Landing -->
+    <section class="card" id="landing">
+      <h2 class="center">Sign in or create an account</h2>
+      <div class="tabs center">
+        <button class="tab active" id="tabSignIn">Sign In</button>
+        <button class="tab" id="tabCreate">Create Account</button>
+      </div>
 
-from dotenv import load_dotenv
-load_dotenv()
+      <!-- Sign In -->
+      <div class="grid grid-2" id="signInForm">
+        <div>
+          <label>Email</label>
+          <input class="input" id="loginEmail" placeholder="you@school.edu" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input type="password" class="input" id="loginPassword" placeholder="••••••••" />
+        </div>
+        <div>
+          <button class="btn-primary" id="btnLogin">Sign In</button>
+        </div>
+      </div>
 
-# FastAPI
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr  # ensure BaseModel exists here
+      <!-- Create Account -->
+      <div id="createFlow" class="hidden">
+        <p class="center small">Choose an account type:</p>
+        <div class="tabs center">
+          <button class="tab active" id="tabRoleAdmin">Admin</button>
+          <button class="tab" id="tabRoleStudent">Student</button>
+        </div>
 
+        <div class="grid grid-2" id="createForm">
+          <div>
+            <label>Full Name</label>
+            <input class="input" id="regName" placeholder="Full name" />
+          </div>
+          <div>
+            <label>Email</label>
+            <input class="input" id="regEmail" placeholder="you@school.edu" />
+          </div>
+          <div>
+            <label>Password</label>
+            <input type="password" class="input" id="regPassword" placeholder="••••••••" />
+          </div>
 
-# --- safety guard; remove once it's working ---
-try:
-    BaseModel
-except NameError:
-    raise RuntimeError("Pydantic BaseModel must be imported before schema classes")
-# ----------------------------------------------
+          <!-- Student only -->
+          <div id="studentExtra" class="hidden">
+            <label>Upload Face Photo</label>
+            <input type="file" id="faceFile" accept="image/*" class="input" />
+            <img id="facePreview" class="preview hidden" alt="Face preview" />
+          </div>
 
-# Pydantic (MUST be before any `class ... (BaseModel)` definitions)
-from pydantic import BaseModel, EmailStr
+          <!-- Admin only -->
+          <div id="adminExtra">
+            <p class="small">Admins don't need a face photo.<br>You will create courses and join codes.</p>
+          </div>
 
-# Auth / crypto
-from passlib.context import CryptContext
-import jwt
-from jwt import ExpiredSignatureError, InvalidTokenError
+          <div>
+            <button class="btn-primary" id="btnCreate">Create Account</button>
+            <p class="small" id="createMsg"></p>
+          </div>
+        </div>
+      </div>
+    </section>
 
-# SQLAlchemy
-from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Float,
-    ForeignKey, Boolean, Text, Table
-)
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session as DBSession, relationship
+    <!-- Admin Dashboard -->
+    <section class="card hidden" id="adminDash">
+      <h2>Admin Dashboard</h2>
+      <div class="grid grid-2">
+        <div>
+          <h3>Create Course</h3>
+          <input class="input" id="courseName" placeholder="Course name (e.g., Intro to AI)" />
+          <label>Late After (minutes)</label>
+          <input class="input" id="lateMinutes" type="number" value="5" />
+          <label>Absent After (minutes)</label>
+          <input class="input" id="absentMinutes" type="number" value="15" />
+          <button class="btn-primary" id="btnCreateCourse">Create Course & Join Code</button>
+          <p class="small" id="courseCreateMsg"></p>
+        </div>
 
-# Cloud SQL connector
-from google.cloud.sql.connector import Connector
-from google.oauth2 import service_account
-import pymysql
+        <div>
+          <h3>My Courses</h3>
+          <div class="search-box">
+            <input class="input" id="courseSearch" placeholder="Search courses..." />
+          </div>
+          <table class="table">
+            <thead><tr><th>Name</th><th>Course ID</th><th>Join Code</th><th>Actions</th></tr></thead>
+            <tbody id="courseRows"></tbody>
+          </table>
 
-# ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
-raw_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or ""
-print("ADC env present:", bool(raw_json.strip()))
-if not raw_json.strip():
-    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not set in environment")
+          <div class="mt-3">
+            <h3>Live Attendance</h3>
+            <p class="small" id="sessionInfo">No active session.</p>
+            <div class="search-box">
+              <input class="input" id="liveAttSearch" placeholder="Search students..." />
+            </div>
+            <table class="table">
+              <thead><tr><th>Student</th><th>Time (ET)</th><th>Status</th></tr></thead>
+              <tbody id="attRows"></tbody>
+            </table>
+          </div>
+          <div class="delete-student mt-3">
+            <hr>
+            <p>
+              <br>
+    <h3>Delete Student Enrollment</h3>
+    <p>Select a student to remove their enrollments and face data.</p>
+          <br>
+    <div class="grid grid-2">
+      <input class="input" id="deleteStudentId" placeholder="Enter Student ID" />
+      <button class="btn-danger" id="btnDeleteStudent">Delete Student Data</button>
+    </div>
 
-credentials_info = json.loads(raw_json)
-print("Using SA email:", credentials_info.get("client_email"))
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
-connector = Connector(credentials=credentials)
-# ------------------------------------------------------------------------------------
+    <p class="small" id="deleteStudentMsg"></p>
+  </div>
+        </div>
+      </div>
 
+      <!-- Attendance History -->
+      <div class="mt-3">
+        <div class="section-header">
+          <h3>Attendance History</h3>
+          <button class="btn-secondary" id="btnExportCSV">Export to CSV</button>
+        </div>
+        <div class="grid grid-2">
+          <div class="search-box">
+            <input class="input" id="historySearch" placeholder="Search by student name..." />
+          </div>
+          <div class="search-box">
+            <select class="input" id="historyCourseFilter">
+              <option value="">All Courses</option>
+            </select>
+          </div>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Course</th>
+              <th>Student</th>
+              <th>Time (ET)</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="historyRows"></tbody>
+        </table>
+      </div>
+    </section>
 
+    <!-- Student Dashboard -->
+    <section class="card hidden" id="studentDash">
+      <h2>Student Dashboard</h2>
+      <div class="grid grid-2">
+        <div>
+          <h3>Enroll with Join Code</h3>
+          <input class="input" id="joinCode" placeholder="e.g., 4KJ9TQ" />
+          <button class="btn-primary" id="btnEnroll">Enroll</button>
+          <p class="small" id="enrollMsg"></p>
 
- 
- # ============= CONFIGURATION =============
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+          <div class="mt-3">
+            <h3>My Courses</h3>
+            <div class="search-box">
+              <input class="input" id="studentCourseSearch" placeholder="Search courses..." />
+            </div>
+            <table class="table">
+              <thead><tr><th>Course Name</th><th>Course ID</th></tr></thead>
+              <tbody id="studentCourseRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3>Live Check-In</h3>
+          <label>Course ID</label>
+          <input class="input" id="checkinCourseId" placeholder="Course ID" />
+          <video id="checkVideo" autoplay muted playsinline></video>
+          <button class="btn-primary" id="btnCheckIn">Check In</button>
+          <p class="small" id="checkMsg"></p>
+        </div>
+      </div>
 
-# Google Cloud SQL Configuration
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASS = os.getenv("DB_PASS", "your-password")
-DB_NAME = os.getenv("DB_NAME", "face_attendance")
-INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
+      <!-- Student Attendance History -->
+      <div class="mt-3">
+        <div class="section-header">
+          <h3>My Attendance History</h3>
+          <button class="btn-secondary" id="btnExportStudentCSV">Export to CSV</button>
+        </div>
+        <div class="search-box">
+          <select class="input" id="studentHistoryCourseFilter">
+            <option value="">All Courses</option>
+          </select>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Course</th>
+              <th>Time (ET)</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="studentHistoryRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
-# Face matching configuration
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
-DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
+<script>
+/* =========================
+   CONFIG
+   ========================= */
+const API_BASE = 'http://localhost:8000';
 
-# --- Anti-replay nonce (simple in-memory; use Redis in production) ---
-NONCE_TTL_SECONDS = int(os.getenv("NONCE_TTL_SECONDS", "60"))
-_nonces: dict[str, float] = {}  # nonce -> expires_at (epoch seconds)
+/* =========================
+   STATE & UTILITIES
+   ========================= */
+let createRole = 'admin';
+let auth = { token:null, role:null, name:null, userId:null };
+let currentSession = null;
+let attPoll = null;
+let allCourses = [];
+let allAttendance = [];
+let studentCourses = [];
+let studentAttendance = [];
 
-def _now() -> float:
-    from time import time as _t
-    return _t()
+const $  = (s)=>document.querySelector(s);
+const show = (sel, vis=true)=>{ const el=$(sel); if(el) el.classList.toggle('hidden', !vis); };
 
-def issue_nonce() -> str:
-    n = secrets.token_urlsafe(16)
-    _nonces[n] = _now() + NONCE_TTL_SECONDS
-    return n
+/* =========================
+   TIMEZONE HELPERS
+   ========================= */
+function toEasternTime(dateString) {
+    const date = new Date(dateString + 'Z'); // Add 'Z' to indicate UTC
+    return date.toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    });
+}
 
-def consume_nonce(nonce: Optional[str]) -> bool:
-    if not nonce:
-        return False
-    exp = _nonces.pop(nonce, None)
-    return bool(exp and exp > _now())
+function toEasternTimeOnly(dateString) {
+    const date = new Date(dateString + 'Z');
+    return date.toLocaleTimeString('en-US', {
+        timeZone: 'America/New_York',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    });
+}
 
-# --- Very small per-user rate limit (token bucket-ish) ---
-_RATE_WINDOW = int(os.getenv("RATE_WINDOW_SECONDS", "60"))
-_RATE_LIMIT  = int(os.getenv("RATE_LIMIT_CHECKINS", "20"))  # X requests per window per user
-_user_hits = defaultdict(list)  # user_id -> [timestamps]
+function toEasternDateOnly(dateString) {
+    const date = new Date(dateString + 'Z');
+    return date.toLocaleDateString('en-US', {
+        timeZone: 'America/New_York'
+    });
+}
 
-def rate_limit(user_id: int):
-    now = _now()
-    hits = _user_hits[user_id]
-    # drop old
-    _user_hits[user_id] = [t for t in hits if now - t < _RATE_WINDOW]
-    if len(_user_hits[user_id]) >= _RATE_LIMIT:
-        raise HTTPException(429, detail="Too many check-ins. Please wait a minute.")
-    _user_hits[user_id].append(now)
+/* =========================
+   THEME TOGGLE
+   ========================= */
+function initTheme(){
+  const saved = localStorage.getItem('theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  updateThemeIcon(saved);
+}
 
-# ============= DATABASE SETUP =============
-Base = declarative_base()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+function updateThemeIcon(theme){
+  const icon = document.querySelector('#themeToggle .theme-icon');
+  if (icon) icon.textContent = theme === 'dark' ? '🌙' : '☀️';
+}
 
-def getconn() -> pymysql.connections.Connection:
-    """Create database connection to Cloud SQL"""
-    conn = connector.connect(
-        os.getenv("INSTANCE_CONNECTION_NAME"),
-        "pymysql",
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASS"),
-        db=os.getenv("DB_NAME"),
-    )
-    return conn
+document.getElementById('themeToggle').onclick = ()=>{
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  updateThemeIcon(next);
+};
 
+initTheme();
 
-# Create SQLAlchemy engine using Cloud SQL connector
-engine = create_engine(
-    "mysql+pymysql://",
-    creator=getconn,
-)
+/* =========================
+   API
+   ========================= */
+async function api(path, method='GET', body){
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: 'omit'
+  });
+  const data = await res.json().catch(()=>null);
+  if (!res.ok) throw new Error(data?.detail || data?.message || 'Request failed');
+  return data;
+}
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+/* =========================
+   FACE-API.JS
+   ========================= */
+const MODEL_URL = './weights';
+let _faceModelsReady = false;
 
-# ============= MODELS =============
-# Association table for student enrollments
-enrollments = Table(
-    'enrollments',
-    Base.metadata,
-    Column('student_id', Integer, ForeignKey('users.id'), primary_key=True),
-    Column('course_id', Integer, ForeignKey('courses.id'), primary_key=True),
-    Column('enrolled_at', DateTime, default=datetime.utcnow)
-)
+async function loadFaceModels(){
+  if (_faceModelsReady) return;
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+  _faceModelsReady = true;
+}
+function faceOptions(){ return new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }); }
+async function ensureModels(){ if(!_faceModelsReady) await loadFaceModels(); }
 
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(String(50), nullable=False)  # 'student', 'professor', 'admin'
-    face_embedding = Column(Text, nullable=True)
-    student_code = Column(String(20), unique=True, nullable=True)  # 👈 add this line
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    courses_taught = relationship("Course", back_populates="professor")
-    enrolled_courses = relationship("Course", secondary=enrollments, back_populates="students")
-    attendance_records = relationship("Attendance", back_populates="student")
+async function embeddingFromImageElement(imgEl){
+  await ensureModels();
+  const det = await faceapi.detectSingleFace(imgEl, faceOptions()).withFaceLandmarks().withFaceDescriptor();
+  if(!det) throw new Error('No face detected in the uploaded photo.');
+  return Array.from(det.descriptor);
+}
 
-class Course(Base):
-    __tablename__ = "courses"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    code = Column(String(20), unique=True, index=True, nullable=False)
-    professor_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    professor = relationship("User", back_populates="courses_taught")
-    students = relationship("User", secondary=enrollments, back_populates="enrolled_courses")
-    sessions = relationship("Session", back_populates="course")
+async function setupCamera(videoEl){
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' } });
+  videoEl.srcObject = stream;
+  await new Promise(res => videoEl.onloadedmetadata = res);
+  return stream;
+}
+async function embeddingFromVideoElement(videoEl){
+  await ensureModels();
+  const det = await faceapi.detectSingleFace(videoEl, faceOptions()).withFaceLandmarks().withFaceDescriptor();
+  if(!det) throw new Error('No face detected on camera.');
+  return Array.from(det.descriptor);
+}
 
-class Session(Base):
-    __tablename__ = "sessions"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    course_id = Column(Integer, ForeignKey('courses.id'), nullable=False)
-    start_time = Column(DateTime, default=datetime.utcnow)
-    end_time = Column(DateTime, nullable=True)
-    late_after_minutes = Column(Integer, default=5)
-    absent_after_minutes = Column(Integer, default=15)
-    is_active = Column(Boolean, default=True)
-    
-    # Relationships
-    course = relationship("Course", back_populates="sessions")
-    attendance_records = relationship("Attendance", back_populates="session")
+/* =========================
+   LANDING TABS
+   ========================= */
+$('#tabSignIn').onclick = ()=>setAction('signin');
+$('#tabCreate').onclick  = ()=>setAction('create');
+function setAction(which){
+  const isCreate = which==='create';
+  $('#tabCreate').classList.toggle('active', isCreate);
+  $('#tabSignIn').classList.toggle('active', !isCreate);
+  show('#signInForm', !isCreate);
+  show('#createFlow', isCreate);
+}
+setAction('signin');
 
-class Attendance(Base):
-    __tablename__ = "attendance"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
-    student_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    status = Column(String(20), nullable=False)  # 'present', 'late', 'absent'
-    confidence = Column(Float, nullable=True)
-    
-    # Relationships
-    session = relationship("Session", back_populates="attendance_records")
-    student = relationship("User", back_populates="attendance_records")
+$('#tabRoleAdmin').onclick   = ()=>setRole('admin');
+$('#tabRoleStudent').onclick = ()=>setRole('student');
+function setRole(role){
+  createRole = role;
+  $('#tabRoleAdmin').classList.toggle('active', role==='admin');
+  $('#tabRoleStudent').classList.toggle('active', role==='student');
+  show('#adminExtra', role==='admin');
+  show('#studentExtra', role==='student');
+}
+setRole('admin');
 
+$('#faceFile')?.addEventListener('change', (e)=>{
+  const file = e.target.files?.[0];
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  const img = $('#facePreview');
+  img.src = url;
+  img.classList.remove('hidden');
+});
 
-# ============= PYDANTIC SCHEMAS =============
-class UserRegister(BaseModel):
-    name: str
-    email: EmailStr
-    password: str
-    role: str
-    face_embedding: Optional[List[float]] = None
+/* =========================
+   AUTH
+   ========================= */
+$('#btnLogin').onclick = async (ev)=>{
+  ev.preventDefault();
+  try{
+    const data = await api('/auth/login','POST',{ 
+      email: $('#loginEmail').value.trim(), 
+      password: $('#loginPassword').value 
+    });
+    auth = { token: data.access_token, role: data.role, name: data.name, userId: data.user_id };
+    postLoginUI();
+  }catch(e){ alert(e.message || 'Login failed'); }
+};
 
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-class CourseCreate(BaseModel):
-    name: str
-
-class CourseEnroll(BaseModel):
-    join_code: str
-
-class SessionStart(BaseModel):
-    course_id: int
-    late_after_minutes: int = 5
-    absent_after_minutes: int = 15
-
-class CheckIn(BaseModel):
-    course_id: int
-    face_embedding: List[float]
-    liveness: bool | None = None
-    nonce: Optional[str] = None
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    role: str
-    name: str
-    # user_id is returned in responses (added for your frontend), but not required in schema
-
-# ============= FASTAPI APP =============
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-
-@asynccontextmanager
-async def lifespan(app):
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("✅ Database tables checked/created.")
-    except Exception as e:
-        print("⚠️ Skipping DB init:", e)
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
-# CORS middleware (tighten ALLOWED_ORIGINS in prod)
-raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
-ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
-# If wildcard, cannot set allow_credentials=True per browser rules
-allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
-
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-security = HTTPBearer()
-
-# ============= DEPENDENCY =============
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# ============= HELPER FUNCTIONS =============
-def generate_join_code(length=6):
-    """Generate random alphanumeric join code"""
-    chars = string.ascii_uppercase + string.digits
-    return ''.join(secrets.choice(chars) for _ in range(length))
-
-def create_access_token(data: dict):
-    """Create JWT token"""
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify JWT token"""
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-def l2_normalize(vec: List[float]) -> List[float]:
-    """L2-normalize a vector to unit length"""
-    import math
-    norm = math.sqrt(sum(v * v for v in vec))
-    if not norm:
-        return vec[:]  # avoid division by zero
-    return [v / norm for v in vec]
-
-def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
-    """Calculate cosine similarity between two vectors (expects normalized vectors)"""
-    import math
-    dot_product = sum(a * b for a, b in zip(vec1, vec2))
-    mag1 = math.sqrt(sum(a * a for a in vec1))
-    mag2 = math.sqrt(sum(b * b for b in vec2))
-    if mag1 == 0 or mag2 == 0:
-        return 0.0
-    return dot_product / (mag1 * mag2)
-
-# ============= ROUTES =============
-@app.get("/")
-def root():
-    return {"message": "Face Attendance API", "status": "running"}
-
-@app.get("/checkin/nonce")
-def get_checkin_nonce(token_data: dict = Depends(verify_token)):
-    """Issue a short-lived nonce to prevent replay of check-in payloads."""
-    return {"nonce": issue_nonce(), "ttl": NONCE_TTL_SECONDS}
-
-@app.post("/auth/register")
-def register(user_data: UserRegister, db: Session = Depends(get_db)):
-    """Register new user (prevents duplicate faces)"""
-    # Check if email exists
-    existing = db.query(User).filter(User.email == user_data.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Guard: students must provide a face
-    if user_data.role == "student" and (not user_data.face_embedding or len(user_data.face_embedding) == 0):
-        raise HTTPException(status_code=400, detail="Face photo/embedding required for student accounts")
-
-    # Hash password
-    hashed = pwd_context.hash(user_data.password[:72])
-    
-    # Prepare face embedding (L2-normalized) and block duplicates
-    face_str = None
-    norm_emb = None
-    if user_data.face_embedding:
-        norm_emb = l2_normalize(user_data.face_embedding)
-
-        # Duplicate-face check (compare against everyone with a stored face)
-        existing_with_face = db.query(User).filter(User.face_embedding.isnot(None)).all()
-        for u in existing_with_face:
-            try:
-                other = json.loads(u.face_embedding)
-            except Exception:
-                continue
-            sim = cosine_similarity(norm_emb, l2_normalize(other))
-            if sim >= DUPLICATE_FACE_THRESHOLD:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Face already registered to another account ({u.email})."
-                )
-
-        face_str = json.dumps(norm_emb)
-
-    # === Generate Student Code ===
-    student_code = None
-    if user_data.role == "student":
-        last_student = db.query(User).filter(User.role == "student").order_by(User.id.desc()).first()
-        next_id = 1 if not last_student else last_student.id + 1
-        student_code = f"STU{next_id:04d}"
-
-    # === Create User ===
-    user = User(
-        name=user_data.name,
-        email=user_data.email,
-        hashed_password=hashed,
-        role=user_data.role,
-        face_embedding=face_str,
-        student_code=student_code  # 👈 attach it here
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    
-    # === Create Token ===
-    token = create_access_token({"user_id": user.id, "role": user.role})
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "role": user.role,
-        "name": user.name,
-        "user_id": user.id,
-        "student_code": student_code  # 👈 optionally send to frontend
+$('#btnCreate').onclick = async (ev)=>{
+  ev.preventDefault();
+  try{
+    let faceVec = null;
+    if (createRole === 'student') {
+      const img = document.getElementById('facePreview');
+      if (!img || !img.src) throw new Error('Please upload a face photo for student signup.');
+      faceVec = await embeddingFromImageElement(img);
     }
+    const data = await api('/auth/register','POST',{
+      name: $('#regName').value.trim(),
+      email: $('#regEmail').value.trim(),
+      password: $('#regPassword').value,
+      role: (createRole==='admin' ? 'professor' : 'student'),
+      face_embedding: faceVec
+    });
+    auth = { token: data.access_token, role: data.role, name: data.name, userId: data.user_id };
+    $('#createMsg').textContent = 'Account created!';
+    postLoginUI();
+  }catch(err){
+    $('#createMsg').textContent = err.message || 'Signup error';
+  }
+};
 
+$('#btnLogout').onclick = ()=>{
+  auth = { token:null, role:null, name:null, userId:null };
+  currentSession = null;
+  stopAttendancePoll();
+  show('#landing', true);
+  show('#adminDash', false);
+  show('#studentDash', false);
+  show('#authTag', false);
+  show('#btnLogout', false);
+  $('#loginEmail').value = '';
+  $('#loginPassword').value = '';
+};
 
-@app.post("/auth/login")
-def login(credentials: UserLogin, db: Session = Depends(get_db)):
-    """Login user"""
-    user = db.query(User).filter(User.email == credentials.email).first()
-    if not user or not pwd_context.verify(credentials.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+function postLoginUI(){
+  $('#authTag').textContent = `${auth.role||'professor'} — ${auth.name||'User'}`;
+  show('#authTag', true);
+  show('#btnLogout', true);
+  show('#landing', false);
+  if ((auth.role||'professor') === 'professor') loadAdmin(); else loadStudent();
+}
+
+/* =========================
+   ADMIN
+   ========================= */
+async function loadAdmin(){ 
+  show('#adminDash', true); 
+  await refreshCourses();
+  await refreshAttendanceHistory();
+}
+
+async function refreshCourses(){
+  const rows = $('#courseRows'); 
+  rows.innerHTML='';
+  try{
+    const courses = await api('/courses/mine');
+    allCourses = courses;
+    updateHistoryCourseFilter(courses);
+    renderCourses(courses);
+  }catch(e){
+    rows.innerHTML = `<tr><td colspan="4" class="small status-err">${e.message||'Failed to load courses'}</td></tr>`;
+  }
+}
+
+function renderCourses(courses){
+  const rows = $('#courseRows');
+  rows.innerHTML = '';
+  if (!courses.length){
+    rows.innerHTML = `<tr><td colspan="4" class="small">No courses yet — create one on the left.</td></tr>`;
+    return;
+  }
+  for(const c of courses){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${c.name}</td><td><span class="kbd">${c.id}</span></td><td><span class="kbd">${c.code}</span></td>
+      <td>
+        <button class="btn-ghost" data-act="start" data-course="${c.id}">Start</button>
+        <button class="btn-ghost" data-act="stop"  data-course="${c.id}">Stop</button>
+      </td>`;
+    rows.appendChild(tr);
+  }
+}
+
+$('#courseSearch').oninput = (e)=>{
+  const query = e.target.value.toLowerCase();
+  const filtered = allCourses.filter(c => c.name.toLowerCase().includes(query));
+  renderCourses(filtered);
+};
+
+$('#btnCreateCourse').onclick = async (ev)=>{
+  ev.preventDefault();
+  const btn = ev.currentTarget;
+  try{
+    const name = $('#courseName').value.trim();
+    const late   = +($('#lateMinutes').value || 5);
+    const absent = +($('#absentMinutes').value || 15);
+    if(!name){ $('#courseCreateMsg').textContent = 'Enter a course name.'; return; }
+
+    btn.disabled = true; btn.textContent = 'Creating…';
+    const c = await api('/courses','POST',{ name });
+    $('#courseCreateMsg').textContent = `Created ${c.name} — join code ${c.code}`;
+    $('#courseName').value = '';
+    await refreshCourses();
+
+    const s = await api('/sessions/start','POST',{ course_id: c.id, late_after_minutes: late, absent_after_minutes: absent });
+    currentSession = s;
+    showSessionInfo();
+    startAttendancePoll();
+  }catch(e){
+    $('#courseCreateMsg').textContent = e.message || 'Could not create course.';
+  }finally{
+    btn.disabled = false; btn.textContent = 'Create Course & Join Code';
+  }
+};
+
+$('#courseRows').onclick = async (e)=>{
+  const btn = e.target.closest('button'); if(!btn) return;
+  const courseId = +btn.dataset.course;
+  const act = btn.dataset.act;
+
+  if (act === 'start'){
+    try{
+      const late   = +($('#lateMinutes').value || 5);
+      const absent = +($('#absentMinutes').value || 15);
+      const s = await api('/sessions/start','POST',{ course_id: courseId, late_after_minutes: late, absent_after_minutes: absent });
+      currentSession = s;
+      showSessionInfo();
+      startAttendancePoll();
+      alert(`Session started (late>${late}m, absent>${absent}m).`);
+    }catch(err){ alert(err.message||'Could not start session'); }
+  }
+
+  if (act === 'stop'){
+    try{
+      if (!currentSession){ alert('No active session.'); return; }
+      await api(`/sessions/${currentSession.id}/end`, 'POST');
+      currentSession = null;
+      showSessionInfo();
+      stopAttendancePoll();
+      $('#attRows').innerHTML = '';
+      await refreshAttendanceHistory();
+      alert('Session ended.');
+    }catch(err){ alert(err.message||'Could not stop session'); }
+  }
+};
+
+function showSessionInfo(){
+  const el = $('#sessionInfo');
+  if (!currentSession){
+    el.textContent = 'No active session.';
+  } else {
+    const start = toEasternTimeOnly(currentSession.start_time);
+    el.textContent = `Active session for course #${currentSession.course_id} — started ${start} ET. Late>${currentSession.late_after_minutes}m, Absent>${currentSession.absent_after_minutes}m.`;
+  }
+}
+
+function startAttendancePoll(){
+  stopAttendancePoll();
+  attPoll = setInterval(refreshAttendance, 2500);
+  refreshAttendance();
+}
+function stopAttendancePoll(){ if(attPoll){ clearInterval(attPoll); attPoll=null; } }
+
+async function refreshAttendance(){
+  if (!currentSession) return;
+  try{
+    const list = await api(`/attendance/session/${currentSession.id}`, 'GET');
+    renderLiveAttendance(list);
+  }catch(e){
+    $('#attRows').innerHTML = `<tr><td colspan="3" class="small status-err">${e.message||'Failed to load attendance'}</td></tr>`;
+  }
+}
+
+function renderLiveAttendance(list){
+  const tbody = $('#attRows'); 
+  tbody.innerHTML='';
+  const query = $('#liveAttSearch').value.toLowerCase();
+  const filtered = query ? list.filter(a => a.student_name.toLowerCase().includes(query)) : list;
+  
+  for(const a of filtered){
+    const t = toEasternTimeOnly(a.timestamp);
+    const cls = a.status==='present' ? 'status-ok' : (a.status==='late' ? 'status-warn' : 'status-err');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${a.student_name}</td><td>${t}</td><td class="${cls}">${a.status.toUpperCase()}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+$('#liveAttSearch').oninput = refreshAttendance;
+
+/* =========================
+   ATTENDANCE HISTORY (ADMIN)
+   ========================= */
+async function refreshAttendanceHistory(){
+  try{
+    const data = await api('/attendance/history', 'GET');
+    allAttendance = data;
+    renderAttendanceHistory(data);
+  }catch(e){
+    $('#historyRows').innerHTML = `<tr><td colspan="5" class="small status-err">${e.message||'Failed to load history'}</td></tr>`;
+  }
+}
+
+function renderAttendanceHistory(data){
+  const tbody = $('#historyRows');
+  tbody.innerHTML = '';
+  if (!data.length){
+    tbody.innerHTML = `<tr><td colspan="5" class="small">No attendance records yet.</td></tr>`;
+    return;
+  }
+  for(const a of data){
+    const date = toEasternDateOnly(a.timestamp);
+    const time = toEasternTimeOnly(a.timestamp);
+    const cls = a.status==='present' ? 'status-ok' : (a.status==='late' ? 'status-warn' : 'status-err');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${date}</td><td>${a.course_name||'N/A'}</td><td>${a.student_name}</td><td>${time}</td><td class="${cls}">${a.status.toUpperCase()}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function updateHistoryCourseFilter(courses){
+  const select = $('#historyCourseFilter');
+  select.innerHTML = '<option value="">All Courses</option>';
+  for(const c of courses){
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  }
+}
+
+$('#historySearch').oninput = filterAttendanceHistory;
+$('#historyCourseFilter').onchange = filterAttendanceHistory;
+
+function filterAttendanceHistory(){
+  const query = $('#historySearch').value.toLowerCase();
+  const courseId = $('#historyCourseFilter').value;
+  
+  let filtered = allAttendance;
+  if (query) filtered = filtered.filter(a => a.student_name.toLowerCase().includes(query));
+  if (courseId) filtered = filtered.filter(a => a.course_id == courseId);
+  
+  renderAttendanceHistory(filtered);
+}
+
+$('#btnExportCSV').onclick = ()=>{
+  const data = allAttendance;
+  if (!data.length){ alert('No data to export'); return; }
+  
+  const csv = [
+    ['Date', 'Course', 'Student', 'Time (ET)', 'Status'],
+    ...data.map(a => [
+      toEasternDateOnly(a.timestamp),
+      a.course_name || 'N/A',
+      a.student_name,
+      toEasternTimeOnly(a.timestamp),
+      a.status.toUpperCase()
+    ])
+  ].map(row => row.join(',')).join('\n');
+  
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `attendance_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+/* =========================
+   STUDENT
+   ========================= */
+function loadStudent(){
+  show('#studentDash', true);
+  setupCamera(document.getElementById('checkVideo')).catch(()=>{
+    $('#checkMsg').textContent = 'Camera blocked. Allow camera and reload.';
+  });
+  refreshStudentCourses();
+  refreshStudentAttendanceHistory();
+}
+
+async function refreshStudentCourses(){
+  try{
+    const courses = await api('/courses/enrolled', 'GET');
+    studentCourses = courses;
+    updateStudentHistoryCourseFilter(courses);
+    renderStudentCourses(courses);
+  }catch(e){
+    $('#studentCourseRows').innerHTML = `<tr><td colspan="2" class="small status-err">${e.message||'Failed to load courses'}</td></tr>`;
+  }
+}
+
+function renderStudentCourses(courses){
+  const tbody = $('#studentCourseRows');
+  tbody.innerHTML = '';
+  if (!courses.length){
+    tbody.innerHTML = `<tr><td colspan="2" class="small">Not enrolled in any courses yet.</td></tr>`;
+    return;
+  }
+  for(const c of courses){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${c.name}</td><td><span class="kbd">${c.id}</span></td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+$('#studentCourseSearch').oninput = (e)=>{
+  const query = e.target.value.toLowerCase();
+  const filtered = studentCourses.filter(c => c.name.toLowerCase().includes(query));
+  renderStudentCourses(filtered);
+};
+
+$('#btnEnroll').onclick = async ()=>{
+  try{
+    const r = await api('/courses/enroll','POST',{ join_code: $('#joinCode').value.trim().toUpperCase() });
+    $('#enrollMsg').textContent = `Enrolled in course #${r.course_id}`;
+    $('#joinCode').value = '';
+    await refreshStudentCourses();
+  }catch(e){ $('#enrollMsg').textContent = e.message||'Enroll failed'; }
+};
+
+$('#btnCheckIn').onclick = async ()=>{
+  const msg = document.getElementById('checkMsg');
+  msg.textContent = 'Checking...';
+  try{
+    const courseId = +document.getElementById('checkinCourseId').value;
+    if (!courseId){ msg.textContent = 'Enter Course ID.'; return; }
     
-    token = create_access_token({"user_id": user.id, "role": user.role})
+    const info = await api(`/sessions/active?course_id=${courseId}`,'GET');
+    if (!info.active){ msg.textContent = 'No active session for this course.'; return; }
+
+    const vec = await embeddingFromVideoElement(document.getElementById('checkVideo'));
+    const r = await api('/checkin','POST',{ course_id: courseId, face_embedding: vec });
+    msg.textContent = `Checked in as ${String(r.status||'present').toUpperCase()}`;
+    await refreshStudentAttendanceHistory();
+  }catch(err){
+    msg.textContent = err.message || 'Check-in failed';
+  }
+};
+
+/* =========================
+   STUDENT ATTENDANCE HISTORY
+   ========================= */
+async function refreshStudentAttendanceHistory(){
+  try{
+    const data = await api('/attendance/my-history', 'GET');
+    studentAttendance = data;
+    renderStudentAttendanceHistory(data);
+  }catch(e){
+    $('#studentHistoryRows').innerHTML = `<tr><td colspan="4" class="small status-err">${e.message||'Failed to load history'}</td></tr>`;
+  }
+}
+
+function renderStudentAttendanceHistory(data){
+  const tbody = $('#studentHistoryRows');
+  tbody.innerHTML = '';
+  if (!data.length){
+    tbody.innerHTML = `<tr><td colspan="4" class="small">No attendance records yet.</td></tr>`;
+    return;
+  }
+  for(const a of data){
+    const date = toEasternDateOnly(a.timestamp);
+    const time = toEasternTimeOnly(a.timestamp);
+    const cls = a.status==='present' ? 'status-ok' : (a.status==='late' ? 'status-warn' : 'status-err');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${date}</td><td>${a.course_name||'N/A'}</td><td>${time}</td><td class="${cls}">${a.status.toUpperCase()}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function updateStudentHistoryCourseFilter(courses){
+  const select = $('#studentHistoryCourseFilter');
+  select.innerHTML = '<option value="">All Courses</option>';
+  for(const c of courses){
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  }
+}
+
+$('#studentHistoryCourseFilter').onchange = ()=>{
+  const courseId = $('#studentHistoryCourseFilter').value;
+  let filtered = studentAttendance;
+  if (courseId) filtered = filtered.filter(a => a.course_id == courseId);
+  renderStudentAttendanceHistory(filtered);
+};
+
+$('#btnExportStudentCSV').onclick = ()=>{
+  const data = studentAttendance;
+  if (!data.length){ alert('No data to export'); return; }
+  
+  const csv = [
+    ['Date', 'Course', 'Time (ET)', 'Status'],
+    ...data.map(a => [
+      toEasternDateOnly(a.timestamp),
+      a.course_name || 'N/A',
+      toEasternTimeOnly(a.timestamp),
+      a.status.toUpperCase()
+    ])
+  ].map(row => row.join(',')).join('\n');
+  
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `my_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+</script>
+<script>
+// Page Transition Script
+document.addEventListener('DOMContentLoaded', function() {
+    // Create transition overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'page-transition';
+    document.body.appendChild(overlay);
+
+    // Handle all navigation links
+    const links = document.querySelectorAll('a[href^="index.html"], a[href^="about.html"], a[href^="pricing.html"], a[href^="app.html"], a[href^="contact.html"]');
     
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "role": user.role,
-        "name": user.name,
-        "user_id": user.id
-    }
-
-@app.post("/courses")
-def create_course(
-    course_data: CourseCreate,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Create new course (professors only)"""
-    if token_data.get("role") != "professor":
-        raise HTTPException(status_code=403, detail="Only professors can create courses")
-    
-    # Generate unique join code
-    while True:
-        code = generate_join_code()
-        existing = db.query(Course).filter(Course.code == code).first()
-        if not existing:
-            break
-    
-    course = Course(
-        name=course_data.name,
-        code=code,
-        professor_id=token_data["user_id"]
-    )
-    db.add(course)
-    db.commit()
-    db.refresh(course)
-    
-    return {"id": course.id, "name": course.name, "code": course.code}
-
-@app.get("/courses/mine")
-def get_my_courses(
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Get courses for current user"""
-    if token_data.get("role") == "professor":
-        courses = db.query(Course).filter(Course.professor_id == token_data["user_id"]).all()
-    else:
-        user = db.query(User).filter(User.id == token_data["user_id"]).first()
-        courses = user.enrolled_courses
-    
-    return [{"id": c.id, "name": c.name, "code": c.code} for c in courses]
-
-@app.post("/courses/enroll")
-def enroll_course(
-    enroll_data: CourseEnroll,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Enroll in course with join code"""
-    course = db.query(Course).filter(Course.code == enroll_data.join_code.upper()).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Invalid join code")
-    
-    user = db.query(User).filter(User.id == token_data["user_id"]).first()
-    if course in user.enrolled_courses:
-        raise HTTPException(status_code=400, detail="Already enrolled")
-    
-    user.enrolled_courses.append(course)
-    db.commit()
-    
-    return {"course_id": course.id, "message": "Enrolled successfully"}
-
-@app.post("/sessions/start")
-def start_session(
-    session_data: SessionStart,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Start attendance session"""
-    if token_data.get("role") != "professor":
-        raise HTTPException(status_code=403, detail="Only professors can start sessions")
-
-    # (Optional hardening) Ensure professor owns the course
-    course = db.query(Course).filter(Course.id == session_data.course_id, Course.professor_id == token_data["user_id"]).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found or not owned by you")
-    
-    # End any active sessions for this course
-    active = db.query(Session).filter(
-        Session.course_id == session_data.course_id,
-        Session.is_active == True
-    ).all()
-    for s in active:
-        s.is_active = False
-        s.end_time = datetime.utcnow()
-    
-    # Create new session
-    session = Session(
-        course_id=session_data.course_id,
-        late_after_minutes=session_data.late_after_minutes,
-        absent_after_minutes=session_data.absent_after_minutes
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    
-    return {
-        "id": session.id,
-        "course_id": session.course_id,
-        "start_time": session.start_time.isoformat(),
-        "late_after_minutes": session.late_after_minutes,
-        "absent_after_minutes": session.absent_after_minutes
-    }
-
-@app.post("/sessions/{session_id}/end")
-def end_session(
-    session_id: int,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """End attendance session"""
-    session = db.query(Session).filter(Session.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    # (Optional hardening) Only professor who owns the course can end it
-    course = db.query(Course).filter(Course.id == session.course_id).first()
-    if not course or course.professor_id != token_data["user_id"]:
-        raise HTTPException(status_code=403, detail="Not allowed to end this session")
-
-    session.is_active = False
-    session.end_time = datetime.utcnow()
-    db.commit()
-    
-    return {"message": "Session ended"} 
-
-@app.get("/sessions/active")
-def check_active_session(
-    course_id: int,
-    db: Session = Depends(get_db)
-):
-    """Check if course has active session"""
-    session = db.query(Session).filter(
-        Session.course_id == course_id,
-        Session.is_active == True
-    ).first()
-    
-    return {"active": session is not None}
-
-@app.post("/checkin")
-def check_in(
-    checkin_data: CheckIn,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Student check-in with face recognition"""
-    # Get active session
-    session = db.query(Session).filter(
-        Session.course_id == checkin_data.course_id,
-        Session.is_active == True
-    ).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="No active session")
-
-    # Anti-abuse gates (match your HTML flow)
-    rate_limit(token_data["user_id"])
-    if not checkin_data.liveness:
-        raise HTTPException(status_code=400, detail="Liveness not verified")
-    if not consume_nonce(checkin_data.nonce):
-        raise HTTPException(status_code=400, detail="Nonce missing/expired")
-    
-    # Get student
-    student = db.query(User).filter(User.id == token_data["user_id"]).first()
-    if not student or not student.face_embedding:
-        raise HTTPException(status_code=400, detail="No face profile found")
-
-    # Load stored embedding
-    stored_embedding = json.loads(student.face_embedding)
-    
-    # Dimension sanity check to prevent cross-model mistakes
-    if len(checkin_data.face_embedding) != len(stored_embedding):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Face embedding dimension mismatch: incoming={len(checkin_data.face_embedding)}, stored={len(stored_embedding)}"
-        )
-
-    # Normalize both embeddings for stable cosine similarity
-    incoming = l2_normalize(checkin_data.face_embedding)
-    stored_norm = l2_normalize(stored_embedding)
-
-    similarity = cosine_similarity(incoming, stored_norm)
-    print(f"[checkin] user={student.id} sim={similarity:.4f}")  # debug logging
-
-    if similarity < FACE_MATCH_THRESHOLD:
-        raise HTTPException(
-            status_code=401,
-            detail=f"Face verification failed. Similarity: {similarity:.3f}, Required: {FACE_MATCH_THRESHOLD}"
-        )
-
-    # Check if already checked in
-    existing = db.query(Attendance).filter(
-        Attendance.session_id == session.id,
-        Attendance.student_id == student.id
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Already checked in")
-    
-    # Calculate status based on time
-    elapsed = (datetime.utcnow() - session.start_time).total_seconds() / 60
-    if elapsed <= session.late_after_minutes:
-        status = "present"
-    elif elapsed <= session.absent_after_minutes:
-        status = "late"
-    else:
-        status = "absent"
-    
-    # Record attendance
-    attendance = Attendance(
-        session_id=session.id,
-        student_id=student.id,
-        status=status,
-        confidence=round(similarity, 4)
-    )
-    db.add(attendance)
-    db.commit()
-    
-    return {"status": status, "confidence": round(similarity, 4)}
-
-@app.get("/attendance/session/{session_id}")
-def get_session_attendance(
-    session_id: int,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Get attendance records for session"""
-    # (Optional hardening) ensure requester has rights
-    records = db.query(Attendance).filter(Attendance.session_id == session_id).all()
-    
-    return [{
-        "student_name": r.student.name,
-        "timestamp": r.timestamp.isoformat(),
-        "status": r.status,
-        "confidence": r.confidence
-    } for r in records]
-
-@app.get("/attendance/history")
-def get_attendance_history(
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Get all attendance history (professors only)"""
-    if token_data.get("role") != "professor":
-        raise HTTPException(status_code=403, detail="Only professors can view all attendance")
-    
-    professor_courses = db.query(Course).filter(Course.professor_id == token_data["user_id"]).all()
-    course_ids = [c.id for c in professor_courses]
-    
-    records = db.query(Attendance).join(Session).filter(
-        Session.course_id.in_(course_ids)
-    ).order_by(Attendance.timestamp.desc()).all()
-    
-    return [{
-    "student_name": r.student.name,
-    "student_code": r.student.student_code,  # 👈 add this
-    "course_name": r.session.course.name,
-    "course_id": r.session.course_id,
-    "timestamp": r.timestamp.isoformat(),
-    "status": r.status,
-    "confidence": r.confidence
-} for r in records]
-
-@app.get("/courses/enrolled")
-def get_enrolled_courses(
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Get courses student is enrolled in"""
-    user = db.query(User).filter(User.id == token_data["user_id"]).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    return [{"id": c.id, "name": c.name, "code": c.code} for c in user.enrolled_courses]
-
-@app.get("/attendance/my-history")
-def get_my_attendance_history(
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Get student's personal attendance history"""
-    records = db.query(Attendance).filter(
-        Attendance.student_id == token_data["user_id"]
-    ).order_by(Attendance.timestamp.desc()).all()
-    
-    return [{
-        "course_name": r.session.course.name,
-        "course_id": r.session.course_id,
-        "timestamp": r.timestamp.isoformat(),
-        "status": r.status,
-        "student_code": r.student.student_code,
-        "confidence": r.confidence
-    } for r in records]
-
-@app.get("/admin/students")
-def get_all_students(
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Admin: Get all student accounts."""
-    if token_data.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-    students = db.query(User).filter(User.role == "student").all()
-    return [{"id": s.id, "name": s.name, "email": s.email} for s in students]
-
-@app.delete("/admin/student/{student_id}/reset")
-def reset_student_enrollment_and_face(
-    student_id: int,
-    token_data: dict = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Admin: Remove a student's enrollments and face embedding, keeping the account."""
-    if token_data.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-    # Fetch student
-    student = db.query(User).filter(User.id == student_id, User.role == "student").first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    # Remove enrollments (many-to-many)
-    db.execute(enrollments.delete().where(enrollments.c.student_id == student_id))
-
-    # Remove face embedding if it exists
-    student.face_embedding = None
-
-    db.commit()
-
-    return {"message": f"Student '{student.name}' enrollments and face data cleared."}
-
-# Cleanup connector on shutdown
-@app.on_event("shutdown")
-def shutdown():
-    connector.close()
+    links.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const href = this.getAttribute('href');
+            
+            // Trigger transition
+            overlay.classList.add('active');
+            
+            // Navigate after animation
+            setTimeout(() => {
+                window.location.href = href;
+            }, 200);
+        });
+    });
+});
+</script>
+</body>
+</html>
