@@ -32,6 +32,8 @@ from google.cloud.sql.connector import Connector
 from google.oauth2 import service_account
 import json
 import os
+import pymysql
+
 
 credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
