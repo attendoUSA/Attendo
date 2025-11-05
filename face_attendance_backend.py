@@ -175,8 +175,6 @@ class Attendance(Base):
     session = relationship("Session", back_populates="attendance_records")
     student = relationship("User", back_populates="attendance_records")
 
-# Create all tables
-Base.metadata.create_all(bind=engine)
 
 # ============= PYDANTIC SCHEMAS =============
 class UserRegister(BaseModel):
@@ -215,7 +213,19 @@ class Token(BaseModel):
     # user_id is returned in responses (added for your frontend), but not required in schema
 
 # ============= FASTAPI APP =============
-app = FastAPI(title="Face Attendance API")
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables checked/created.")
+    except Exception as e:
+        print("⚠️ Skipping DB init:", e)
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 # CORS middleware (tighten ALLOWED_ORIGINS in prod)
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
