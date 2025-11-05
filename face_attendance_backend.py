@@ -29,7 +29,14 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 
 from google.cloud.sql.connector import Connector
-import pymysql
+from google.oauth2 import service_account
+import json
+import os
+
+credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
+
+connector = Connector(credentials=credentials)
 
 # ============= CONFIGURATION =============
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
