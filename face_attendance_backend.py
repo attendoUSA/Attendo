@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from jose import jwt, JWTError
 
 # Load environment variables from .env file
 load_dotenv()
