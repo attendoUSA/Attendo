@@ -12,12 +12,13 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-# Load environment variables from .env file
+from dotenv import load_dotenv
 load_dotenv()
+
 import os
+import json
 import secrets
 import string
-import json  # used in register/checkin
 from collections import defaultdict
 
 # JWT (PyJWT)
@@ -30,16 +31,14 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 
 from google.cloud.sql.connector import Connector
 from google.oauth2 import service_account
-import json
-import os
 import pymysql
 
-
+# ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
 credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
-
-# Create connector using the loaded credentials
 connector = Connector(credentials=credentials)
+# ------------------------------------------------------------------------------------
+
 
 # ============= CONFIGURATION =============
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
