@@ -33,6 +33,18 @@ from google.cloud.sql.connector import Connector
 from google.oauth2 import service_account
 import pymysql
 
+# --- DEBUG: confirm env var is present and parsed ---
+raw_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or ""
+print("ADC env present:", bool(raw_json.strip()))
+if not raw_json.strip():
+    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not set in environment")
+credentials_info = json.loads(raw_json)
+print("Using SA email:", credentials_info.get("client_email"))
+
+# ----------------------------------------------------
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
+connector = Connector(credentials=credentials)
+
 # ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
 credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
