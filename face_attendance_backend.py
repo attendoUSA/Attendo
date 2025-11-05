@@ -12,7 +12,6 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -20,24 +19,35 @@ import os
 import json
 import secrets
 import string
-import json  # used in register/checkin
 from collections import defaultdict
 
 # JWT (PyJWT)
-@@ -30,711 +31,709 @@
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
+
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session, relationship
 
 from google.cloud.sql.connector import Connector
 from google.oauth2 import service_account
-import json
-import os
 import pymysql
 
+# --- DEBUG: confirm env var is present and parsed ---
+raw_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or ""
+print("ADC env present:", bool(raw_json.strip()))
+if not raw_json.strip():
+    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not set in environment")
+credentials_info = json.loads(raw_json)
+print("Using SA email:", credentials_info.get("client_email"))
+
+# ----------------------------------------------------
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
+connector = Connector(credentials=credentials)
 
 # ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
 credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
-
-# Create connector using the loaded credentials
 connector = Connector(credentials=credentials)
 # ------------------------------------------------------------------------------------
 
