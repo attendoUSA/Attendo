@@ -1,3 +1,4 @@
+
 from datetime import datetime, timedelta
 from typing import Optional, List
 from collections import defaultdict
@@ -11,7 +12,14 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-# ✅ Pydantic (MUST be before any `class ... (BaseModel)` definitions)
+# --- safety guard; remove once it's working ---
+try:
+    BaseModel
+except NameError:
+    raise RuntimeError("Pydantic BaseModel must be imported before schema classes")
+# ----------------------------------------------
+
+# Pydantic (MUST be before any `class ... (BaseModel)` definitions)
 from pydantic import BaseModel, EmailStr
 
 # Auth / crypto
@@ -43,6 +51,7 @@ print("Using SA email:", credentials_info.get("client_email"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
 connector = Connector(credentials=credentials)
 # ------------------------------------------------------------------------------------
+
 
 
  
