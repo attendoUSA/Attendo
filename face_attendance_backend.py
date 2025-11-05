@@ -97,9 +97,6 @@ def rate_limit(user_id: int):
 Base = declarative_base()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Initialize Cloud SQL Connector
-connector = Connector()
-
 def getconn() -> pymysql.connections.Connection:
     """Create database connection to Cloud SQL"""
     conn = connector.connect(
