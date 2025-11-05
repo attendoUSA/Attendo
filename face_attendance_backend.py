@@ -38,6 +38,8 @@ import pymysql
 credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
 
+# Create connector using the loaded credentials
+connector = Connector(credentials=credentials)
 
 # ============= CONFIGURATION =============
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
