@@ -11,17 +11,20 @@ from sqlalchemy.orm import Session
 from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from jose import jwt, JWTError
 
 # Load environment variables from .env file
+from dotenv import load_dotenv
 load_dotenv()
+
 import os
+import json
 import secrets
 import string
 import json  # used in register/checkin
 from collections import defaultdict
 
 # JWT (PyJWT)
+@@ -30,711 +31,709 @@
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
@@ -29,6 +32,31 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 
+from google.cloud.sql.connector import Connector
+from google.oauth2 import service_account
+import json
+import os
+import pymysql
+
+# --- DEBUG: confirm env var is present and parsed ---
+raw_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or ""
+print("ADC env present:", bool(raw_json.strip()))
+if not raw_json.strip():
+    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not set in environment")
+credentials_info = json.loads(raw_json)
+print("Using SA email:", credentials_info.get("client_email"))
+
+# ----------------------------------------------------
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
+connector = Connector(credentials=credentials)
+
+# ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
+credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
+
+# Create connector using the loaded credentials
+connector = Connector(credentials=credentials)
+# ------------------------------------------------------------------------------------
 
 
 # ============= CONFIGURATION =============
@@ -36,11 +64,11 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-# ============= DATABASE CONFIGURATION =============
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "mysql+pymysql://user:password@localhost:3306/face_attendance?charset=utf8mb4"
-)
+# Google Cloud SQL Configuration
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASS = os.getenv("DB_PASS", "your-password")
+DB_NAME = os.getenv("DB_NAME", "face_attendance")
+INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
 
 # Face matching configuration
 FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
@@ -89,13 +117,14 @@ connector = Connector()
 def getconn() -> pymysql.connections.Connection:
     """Create database connection to Cloud SQL"""
     conn = connector.connect(
-        INSTANCE_CONNECTION_NAME,
+        os.getenv("INSTANCE_CONNECTION_NAME"),
         "pymysql",
-        user=DB_USER,
-        password=DB_PASS,
-        db=DB_NAME
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASS"),
+        db=os.getenv("DB_NAME"),
     )
     return conn
+
 
 # Create SQLAlchemy engine using Cloud SQL connector
 engine = create_engine(
@@ -117,7 +146,7 @@ enrollments = Table(
 
 class User(Base):
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
@@ -126,7 +155,7 @@ class User(Base):
     face_embedding = Column(Text, nullable=True)
     student_code = Column(String(20), unique=True, nullable=True)  # 👈 add this line
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     # Relationships
     courses_taught = relationship("Course", back_populates="professor")
     enrolled_courses = relationship("Course", secondary=enrollments, back_populates="students")
@@ -134,13 +163,13 @@ class User(Base):
 
 class Course(Base):
     __tablename__ = "courses"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     code = Column(String(20), unique=True, index=True, nullable=False)
     professor_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     # Relationships
     professor = relationship("User", back_populates="courses_taught")
     students = relationship("User", secondary=enrollments, back_populates="enrolled_courses")
@@ -148,7 +177,7 @@ class Course(Base):
 
 class Session(Base):
     __tablename__ = "sessions"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey('courses.id'), nullable=False)
     start_time = Column(DateTime, default=datetime.utcnow)
@@ -156,27 +185,25 @@ class Session(Base):
     late_after_minutes = Column(Integer, default=5)
     absent_after_minutes = Column(Integer, default=15)
     is_active = Column(Boolean, default=True)
-    
+
     # Relationships
     course = relationship("Course", back_populates="sessions")
     attendance_records = relationship("Attendance", back_populates="session")
 
 class Attendance(Base):
     __tablename__ = "attendance"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
     student_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     status = Column(String(20), nullable=False)  # 'present', 'late', 'absent'
     confidence = Column(Float, nullable=True)
-    
+
     # Relationships
     session = relationship("Session", back_populates="attendance_records")
     student = relationship("User", back_populates="attendance_records")
 
-# Create all tables
-Base.metadata.create_all(bind=engine)
 
 # ============= PYDANTIC SCHEMAS =============
 class UserRegister(BaseModel):
@@ -215,7 +242,19 @@ class Token(BaseModel):
     # user_id is returned in responses (added for your frontend), but not required in schema
 
 # ============= FASTAPI APP =============
-app = FastAPI(title="Face Attendance API")
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables checked/created.")
+    except Exception as e:
+        print("⚠️ Skipping DB init:", e)
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 # CORS middleware (tighten ALLOWED_ORIGINS in prod)
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
@@ -226,8 +265,6 @@ allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000"
-    "https://attendoface.github.io"
-    "https://attendo-backend.onrender.com"
 ]
 
 app.add_middleware(
@@ -306,14 +343,14 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == user_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     # Guard: students must provide a face
     if user_data.role == "student" and (not user_data.face_embedding or len(user_data.face_embedding) == 0):
         raise HTTPException(status_code=400, detail="Face photo/embedding required for student accounts")
 
     # Hash password
     hashed = pwd_context.hash(user_data.password[:72])
-    
+
     # Prepare face embedding (L2-normalized) and block duplicates
     face_str = None
     norm_emb = None
@@ -355,10 +392,10 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    
+
     # === Create Token ===
     token = create_access_token({"user_id": user.id, "role": user.role})
-    
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -375,9 +412,9 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == credentials.email).first()
     if not user or not pwd_context.verify(credentials.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+
     token = create_access_token({"user_id": user.id, "role": user.role})
-    
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -395,14 +432,14 @@ def create_course(
     """Create new course (professors only)"""
     if token_data.get("role") != "professor":
         raise HTTPException(status_code=403, detail="Only professors can create courses")
-    
+
     # Generate unique join code
     while True:
         code = generate_join_code()
         existing = db.query(Course).filter(Course.code == code).first()
         if not existing:
             break
-    
+
     course = Course(
         name=course_data.name,
         code=code,
@@ -411,7 +448,7 @@ def create_course(
     db.add(course)
     db.commit()
     db.refresh(course)
-    
+
     return {"id": course.id, "name": course.name, "code": course.code}
 
 @app.get("/courses/mine")
@@ -425,7 +462,7 @@ def get_my_courses(
     else:
         user = db.query(User).filter(User.id == token_data["user_id"]).first()
         courses = user.enrolled_courses
-    
+
     return [{"id": c.id, "name": c.name, "code": c.code} for c in courses]
 
 @app.post("/courses/enroll")
@@ -438,14 +475,14 @@ def enroll_course(
     course = db.query(Course).filter(Course.code == enroll_data.join_code.upper()).first()
     if not course:
         raise HTTPException(status_code=404, detail="Invalid join code")
-    
+
     user = db.query(User).filter(User.id == token_data["user_id"]).first()
     if course in user.enrolled_courses:
         raise HTTPException(status_code=400, detail="Already enrolled")
-    
+
     user.enrolled_courses.append(course)
     db.commit()
-    
+
     return {"course_id": course.id, "message": "Enrolled successfully"}
 
 @app.post("/sessions/start")
@@ -462,7 +499,7 @@ def start_session(
     course = db.query(Course).filter(Course.id == session_data.course_id, Course.professor_id == token_data["user_id"]).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found or not owned by you")
-    
+
     # End any active sessions for this course
     active = db.query(Session).filter(
         Session.course_id == session_data.course_id,
@@ -471,7 +508,7 @@ def start_session(
     for s in active:
         s.is_active = False
         s.end_time = datetime.utcnow()
-    
+
     # Create new session
     session = Session(
         course_id=session_data.course_id,
@@ -481,7 +518,7 @@ def start_session(
     db.add(session)
     db.commit()
     db.refresh(session)
-    
+
     return {
         "id": session.id,
         "course_id": session.course_id,
@@ -500,7 +537,7 @@ def end_session(
     session = db.query(Session).filter(Session.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     # (Optional hardening) Only professor who owns the course can end it
     course = db.query(Course).filter(Course.id == session.course_id).first()
     if not course or course.professor_id != token_data["user_id"]:
@@ -509,7 +546,7 @@ def end_session(
     session.is_active = False
     session.end_time = datetime.utcnow()
     db.commit()
-    
+
     return {"message": "Session ended"} 
 
 @app.get("/sessions/active")
@@ -522,7 +559,7 @@ def check_active_session(
         Session.course_id == course_id,
         Session.is_active == True
     ).first()
-    
+
     return {"active": session is not None}
 
 @app.post("/checkin")
@@ -546,7 +583,7 @@ def check_in(
         raise HTTPException(status_code=400, detail="Liveness not verified")
     if not consume_nonce(checkin_data.nonce):
         raise HTTPException(status_code=400, detail="Nonce missing/expired")
-    
+
     # Get student
     student = db.query(User).filter(User.id == token_data["user_id"]).first()
     if not student or not student.face_embedding:
@@ -554,7 +591,7 @@ def check_in(
 
     # Load stored embedding
     stored_embedding = json.loads(student.face_embedding)
-    
+
     # Dimension sanity check to prevent cross-model mistakes
     if len(checkin_data.face_embedding) != len(stored_embedding):
         raise HTTPException(
@@ -582,7 +619,7 @@ def check_in(
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Already checked in")
-    
+
     # Calculate status based on time
     elapsed = (datetime.utcnow() - session.start_time).total_seconds() / 60
     if elapsed <= session.late_after_minutes:
@@ -591,7 +628,7 @@ def check_in(
         status = "late"
     else:
         status = "absent"
-    
+
     # Record attendance
     attendance = Attendance(
         session_id=session.id,
@@ -601,7 +638,7 @@ def check_in(
     )
     db.add(attendance)
     db.commit()
-    
+
     return {"status": status, "confidence": round(similarity, 4)}
 
 @app.get("/attendance/session/{session_id}")
@@ -613,7 +650,7 @@ def get_session_attendance(
     """Get attendance records for session"""
     # (Optional hardening) ensure requester has rights
     records = db.query(Attendance).filter(Attendance.session_id == session_id).all()
-    
+
     return [{
         "student_name": r.student.name,
         "timestamp": r.timestamp.isoformat(),
@@ -629,14 +666,14 @@ def get_attendance_history(
     """Get all attendance history (professors only)"""
     if token_data.get("role") != "professor":
         raise HTTPException(status_code=403, detail="Only professors can view all attendance")
-    
+
     professor_courses = db.query(Course).filter(Course.professor_id == token_data["user_id"]).all()
     course_ids = [c.id for c in professor_courses]
-    
+
     records = db.query(Attendance).join(Session).filter(
         Session.course_id.in_(course_ids)
     ).order_by(Attendance.timestamp.desc()).all()
-    
+
     return [{
     "student_name": r.student.name,
     "student_code": r.student.student_code,  # 👈 add this
@@ -656,7 +693,7 @@ def get_enrolled_courses(
     user = db.query(User).filter(User.id == token_data["user_id"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     return [{"id": c.id, "name": c.name, "code": c.code} for c in user.enrolled_courses]
 
 @app.get("/attendance/my-history")
@@ -668,7 +705,7 @@ def get_my_attendance_history(
     records = db.query(Attendance).filter(
         Attendance.student_id == token_data["user_id"]
     ).order_by(Attendance.timestamp.desc()).all()
-    
+
     return [{
         "course_name": r.session.course.name,
         "course_id": r.session.course_id,
@@ -719,4 +756,3 @@ def reset_student_enrollment_and_face(
 @app.on_event("shutdown")
 def shutdown():
     connector.close()
-
