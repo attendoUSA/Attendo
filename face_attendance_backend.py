@@ -1,104 +1,82 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+# ─────────────────────────────────────────────────────────────────────────────
+# Imports (deduped)
+# ─────────────────────────────────────────────────────────────────────────────
+import os
+import json
 from datetime import datetime, timedelta
-from passlib.context import CryptContext
-from dotenv import load_dotenv
-from fastapi import Depends, HTTPException
-from sqlalchemy.orm import Session
-from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from typing import Optional, List
+from collections import defaultdict
 
 from dotenv import load_dotenv
 load_dotenv()
 
-import os
-import json
-import secrets
-import string
-from collections import defaultdict
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr
 
-# JWT (PyJWT)
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy import (
+    create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
+)
+from sqlalchemy.orm import sessionmaker, declarative_base, Session, relationship
 
 from google.cloud.sql.connector import Connector
-from google.oauth2 import service_account
-import pymysql
+import sqlalchemy  # SQLAlchemy core for create_engine
 
-# --- DEBUG: confirm env var is present and parsed ---
-raw_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or ""
-print("ADC env present:", bool(raw_json.strip()))
-if not raw_json.strip():
-    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not set in environment")
-credentials_info = json.loads(raw_json)
-print("Using SA email:", credentials_info.get("client_email"))
+# ─────────────────────────────────────────────────────────────────────────────
+# Google ADC via Secret File (Render)
+# ─────────────────────────────────────────────────────────────────────────────
+ADC_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")  # should be /etc/secrets/gcp-sa.json
 
-# ----------------------------------------------------
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
-connector = Connector(credentials=credentials)
+if ADC_PATH and os.path.exists(ADC_PATH):
+    print(f"ADC env present: True (path: {ADC_PATH})")
+    try:
+        with open(ADC_PATH, "r") as f:
+            sa_email = json.load(f).get("client_email")
+        if sa_email:
+            print(f"Using SA email: {sa_email}")
+    except Exception as e:
+        print(f"Could not read SA email: {e}")
+else:
+    print(f"ADC env present: False (GOOGLE_APPLICATION_CREDENTIALS={ADC_PATH})")
 
-# ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
-credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
-connector = Connector(credentials=credentials)
-# ------------------------------------------------------------------------------------
-
-
-# ============= CONFIGURATION =============
+# ─────────────────────────────────────────────────────────────────────────────
+# App config
+# ─────────────────────────────────────────────────────────────────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-# Google Cloud SQL Configuration
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASS = os.getenv("DB_PASS", "your-password")
-DB_NAME = os.getenv("DB_NAME", "face_attendance")
-INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloud SQL Connector (MySQL) using ADC
+# ─────────────────────────────────────────────────────────────────────────────
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_NAME = os.getenv("DB_NAME")
+INSTANCE = os.getenv("INSTANCE_CONNECTION_NAME")  # e.g. project:region:instance
 
-# Face matching configuration
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
-DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
+connector = Connector()  # uses ADC from GOOGLE_APPLICATION_CREDENTIALS
 
-# --- Anti-replay nonce (simple in-memory; use Redis in production) ---
-NONCE_TTL_SECONDS = int(os.getenv("NONCE_TTL_SECONDS", "60"))
-_nonces: dict[str, float] = {}  # nonce -> expires_at (epoch seconds)
+def getconn():
+    return connector.connect(
+        INSTANCE,
+        "pymysql",
+        user=DB_USER,
+        password=DB_PASS,
+        db=DB_NAME,
+    )
 
-def _now() -> float:
-    from time import time as _t
-    return _t()
-
-def issue_nonce() -> str:
-    n = secrets.token_urlsafe(16)
-    _nonces[n] = _now() + NONCE_TTL_SECONDS
-    return n
-
-def consume_nonce(nonce: Optional[str]) -> bool:
-    if not nonce:
-        return False
-    exp = _nonces.pop(nonce, None)
-    return bool(exp and exp > _now())
-
-# --- Very small per-user rate limit (token bucket-ish) ---
-_RATE_WINDOW = int(os.getenv("RATE_WINDOW_SECONDS", "60"))
-_RATE_LIMIT  = int(os.getenv("RATE_LIMIT_CHECKINS", "20"))  # X requests per window per user
-_user_hits = defaultdict(list)  # user_id -> [timestamps]
-
-def rate_limit(user_id: int):
-    now = _now()
-    hits = _user_hits[user_id]
-    # drop old
-    _user_hits[user_id] = [t for t in hits if now - t < _RATE_WINDOW]
-    if len(_user_hits[user_id]) >= _RATE_LIMIT:
-        raise HTTPException(429, detail="Too many check-ins. Please wait a minute.")
-    _user_hits[user_id].append(now)
+engine = sqlalchemy.create_engine(
+    "mysql+pymysql://",
+    creator=getconn,
+    pool_pre_ping=True,
+)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base = declarative_base()
 
 # ============= DATABASE SETUP =============
 Base = declarative_base()
