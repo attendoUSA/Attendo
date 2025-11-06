@@ -1,249 +1,143 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+# ─────────────────────────────────────────────────────────────────────────────
+# Imports (deduped)
+# ─────────────────────────────────────────────────────────────────────────────
+import os, json, time, math, secrets, string
 from datetime import datetime, timedelta
-from passlib.context import CryptContext
-from dotenv import load_dotenv
-from fastapi import Depends, HTTPException
-from sqlalchemy.orm import Session
-from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from typing import Optional, List
+from collections import defaultdict, deque
 
-# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-import os
-import json
-import secrets
-import string
-import json  # used in register/checkin
-from collections import defaultdict
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr
 
-# JWT (PyJWT)
-@@ -30,711 +31,709 @@
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy import (
+    create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
+)
+from sqlalchemy.orm import sessionmaker, declarative_base, Session, relationship
 
 from google.cloud.sql.connector import Connector
-from google.oauth2 import service_account
-import json
-import os
-import pymysql
+import sqlalchemy
 
-# --- DEBUG: confirm env var is present and parsed ---
-raw_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or ""
-print("ADC env present:", bool(raw_json.strip()))
-if not raw_json.strip():
-    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not set in environment")
-credentials_info = json.loads(raw_json)
-print("Using SA email:", credentials_info.get("client_email"))
+# ─────────────────────────────────────────────────────────────────────────────
+# Google ADC via Secret File (Render)
+# ─────────────────────────────────────────────────────────────────────────────
+ADC_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")  # /etc/secrets/gcp-sa.json
+if ADC_PATH and os.path.exists(ADC_PATH):
+    print(f"ADC env present: True (path: {ADC_PATH})")
+    try:
+        with open(ADC_PATH, "r") as f:
+            sa_email = json.load(f).get("client_email")
+        if sa_email:
+            print(f"Using SA email: {sa_email}")
+    except Exception as e:
+        print(f"Could not read SA email: {e}")
+else:
+    print(f"ADC env present: False (GOOGLE_APPLICATION_CREDENTIALS={ADC_PATH})")
 
-# ----------------------------------------------------
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
-connector = Connector(credentials=credentials)
-
-# ---------- Cloud SQL credentials + connector (MUST be above any DB usage) ----------
-credentials_info = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
-
-# Create connector using the loaded credentials
-connector = Connector(credentials=credentials)
-# ------------------------------------------------------------------------------------
-
-
-# ============= CONFIGURATION =============
+# ─────────────────────────────────────────────────────────────────────────────
+# App & Security config
+# ─────────────────────────────────────────────────────────────────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-# Google Cloud SQL Configuration
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASS = os.getenv("DB_PASS", "your-password")
-DB_NAME = os.getenv("DB_NAME", "face_attendance")
-INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
+# thresholds (tune later)
+FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.55"))
+DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))
 
-# Face matching configuration
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
-DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
+# Nonce/Rate limit
+NONCE_TTL_SECONDS = int(os.getenv("NONCE_TTL_SECONDS", "45"))
+RATE_LIMIT_MAX_PER_MIN = int(os.getenv("RATE_LIMIT_MAX_PER_MIN", "6"))
 
-# --- Anti-replay nonce (simple in-memory; use Redis in production) ---
-NONCE_TTL_SECONDS = int(os.getenv("NONCE_TTL_SECONDS", "60"))
-_nonces: dict[str, float] = {}  # nonce -> expires_at (epoch seconds)
+# ─────────────────────────────────────────────────────────────────────────────
+# DB via Cloud SQL Connector (MySQL)
+# ─────────────────────────────────────────────────────────────────────────────
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_NAME = os.getenv("DB_NAME")
+INSTANCE = os.getenv("INSTANCE_CONNECTION_NAME")  # project:region:instance
 
-def _now() -> float:
-    from time import time as _t
-    return _t()
+connector = Connector()  # uses ADC from GOOGLE_APPLICATION_CREDENTIALS
+
+def getconn():
+    return connector.connect(
+        INSTANCE,
+        "pymysql",
+        user=DB_USER,
+        password=DB_PASS,
+        db=DB_NAME,
+    )
+
+engine = sqlalchemy.create_engine(
+    "mysql+pymysql://",
+    creator=getconn,
+    pool_pre_ping=True,
+)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base = declarative_base()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORS (use ALLOWED_ORIGINS if provided, else sensible defaults)
+# ─────────────────────────────────────────────────────────────────────────────
+raw_origins = os.getenv("ALLOWED_ORIGINS")
+if raw_origins:
+    ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
+else:
+    ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+security = HTTPBearer()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Small helpers (nonces, rate limit, vectors)
+# ─────────────────────────────────────────────────────────────────────────────
+_nonces: dict[str, float] = {}            # nonce -> expiry_ts
+_hits: dict[int, deque] = defaultdict(deque)  # user_id -> deque[timestamps]
 
 def issue_nonce() -> str:
     n = secrets.token_urlsafe(16)
-    _nonces[n] = _now() + NONCE_TTL_SECONDS
+    _nonces[n] = time.time() + NONCE_TTL_SECONDS
     return n
 
 def consume_nonce(nonce: Optional[str]) -> bool:
     if not nonce:
         return False
     exp = _nonces.pop(nonce, None)
-    return bool(exp and exp > _now())
-
-# --- Very small per-user rate limit (token bucket-ish) ---
-_RATE_WINDOW = int(os.getenv("RATE_WINDOW_SECONDS", "60"))
-_RATE_LIMIT  = int(os.getenv("RATE_LIMIT_CHECKINS", "20"))  # X requests per window per user
-_user_hits = defaultdict(list)  # user_id -> [timestamps]
+    return bool(exp and exp >= time.time())
 
 def rate_limit(user_id: int):
-    now = _now()
-    hits = _user_hits[user_id]
+    now = time.time()
+    window = 60.0
+    dq = _hits[user_id]
     # drop old
-    _user_hits[user_id] = [t for t in hits if now - t < _RATE_WINDOW]
-    if len(_user_hits[user_id]) >= _RATE_LIMIT:
-        raise HTTPException(429, detail="Too many check-ins. Please wait a minute.")
-    _user_hits[user_id].append(now)
+    while dq and now - dq[0] > window:
+        dq.popleft()
+    if len(dq) >= RATE_LIMIT_MAX_PER_MIN:
+        raise HTTPException(status_code=429, detail="Too many check-ins, slow down.")
+    dq.append(now)
 
-# ============= DATABASE SETUP =============
-Base = declarative_base()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def l2_normalize(vec: List[float]) -> List[float]:
+    norm = math.sqrt(sum(v*v for v in vec))
+    return vec[:] if norm == 0 else [v/norm for v in vec]
 
-# Initialize Cloud SQL Connector
-connector = Connector()
+def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+    dot = sum(a*b for a, b in zip(v1, v2))
+    m1 = math.sqrt(sum(a*a for a in v1))
+    m2 = math.sqrt(sum(b*b for b in v2))
+    return 0.0 if m1 == 0 or m2 == 0 else dot/(m1*m2)
 
-def getconn() -> pymysql.connections.Connection:
-    """Create database connection to Cloud SQL"""
-    conn = connector.connect(
-        os.getenv("INSTANCE_CONNECTION_NAME"),
-        "pymysql",
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASS"),
-        db=os.getenv("DB_NAME"),
-    )
-    return conn
-
-
-# Create SQLAlchemy engine using Cloud SQL connector
-engine = create_engine(
-    "mysql+pymysql://",
-    creator=getconn,
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# ============= MODELS =============
-# Association table for student enrollments
-enrollments = Table(
-    'enrollments',
-    Base.metadata,
-    Column('student_id', Integer, ForeignKey('users.id'), primary_key=True),
-    Column('course_id', Integer, ForeignKey('courses.id'), primary_key=True),
-    Column('enrolled_at', DateTime, default=datetime.utcnow)
-)
-
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(String(50), nullable=False)  # 'student', 'professor', 'admin'
-    face_embedding = Column(Text, nullable=True)
-    student_code = Column(String(20), unique=True, nullable=True)  # 👈 add this line
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    courses_taught = relationship("Course", back_populates="professor")
-    enrolled_courses = relationship("Course", secondary=enrollments, back_populates="students")
-    attendance_records = relationship("Attendance", back_populates="student")
-
-class Course(Base):
-    __tablename__ = "courses"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    code = Column(String(20), unique=True, index=True, nullable=False)
-    professor_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    professor = relationship("User", back_populates="courses_taught")
-    students = relationship("User", secondary=enrollments, back_populates="enrolled_courses")
-    sessions = relationship("Session", back_populates="course")
-
-class Session(Base):
-    __tablename__ = "sessions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    course_id = Column(Integer, ForeignKey('courses.id'), nullable=False)
-    start_time = Column(DateTime, default=datetime.utcnow)
-    end_time = Column(DateTime, nullable=True)
-    late_after_minutes = Column(Integer, default=5)
-    absent_after_minutes = Column(Integer, default=15)
-    is_active = Column(Boolean, default=True)
-
-    # Relationships
-    course = relationship("Course", back_populates="sessions")
-    attendance_records = relationship("Attendance", back_populates="session")
-
-class Attendance(Base):
-    __tablename__ = "attendance"
-
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
-    student_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    status = Column(String(20), nullable=False)  # 'present', 'late', 'absent'
-    confidence = Column(Float, nullable=True)
-
-    # Relationships
-    session = relationship("Session", back_populates="attendance_records")
-    student = relationship("User", back_populates="attendance_records")
-
-
-# ============= PYDANTIC SCHEMAS =============
-class UserRegister(BaseModel):
-    name: str
-    email: EmailStr
-    password: str
-    role: str
-    face_embedding: Optional[List[float]] = None
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-class CourseCreate(BaseModel):
-    name: str
-
-class CourseEnroll(BaseModel):
-    join_code: str
-
-class SessionStart(BaseModel):
-    course_id: int
-    late_after_minutes: int = 5
-    absent_after_minutes: int = 15
-
-class CheckIn(BaseModel):
-    course_id: int
-    face_embedding: List[float]
-    liveness: bool | None = None
-    nonce: Optional[str] = None
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    role: str
-    name: str
-    # user_id is returned in responses (added for your frontend), but not required in schema
-
-# ============= FASTAPI APP =============
+# ─────────────────────────────────────────────────────────────────────────────
+# FastAPI app with DB init
+# ─────────────────────────────────────────────────────────────────────────────
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
 
 @asynccontextmanager
 async def lifespan(app):
@@ -256,24 +150,14 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS middleware (tighten ALLOWED_ORIGINS in prod)
-raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
-ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
-# If wildcard, cannot set allow_credentials=True per browser rules
-allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
-
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 security = HTTPBearer()
 
 # ============= DEPENDENCY =============
