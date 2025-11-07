@@ -242,15 +242,6 @@ app.add_middleware(
     allow_headers=["*"],   # includes Authorization, Content-Type
 )
 
-# Health + preflight helpers
-@app.head("/")
-def head_root():
-    return Response(status_code=200)
-
-from starlette.responses import PlainTextResponse
-@app.options("/{rest_of_path:path}")
-def preflight_ok(rest_of_path: str):
-    return PlainTextResponse("", status_code=204)
 
 security = HTTPBearer()
 
