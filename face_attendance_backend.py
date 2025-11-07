@@ -234,8 +234,6 @@ ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
 allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
 
 origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
     "https://attendousa.github.io",
     "https://attendousa.github.io/Attendo"
 ]
