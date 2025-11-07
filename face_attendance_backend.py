@@ -227,27 +227,25 @@ async def lifespan(app):
         print("⚠️ Skipping DB init:", e)
     yield
 
-app = FastAPI(lifespan=lifespan)
+# top of file, right after app = FastAPI()
+from fastapi.middleware.cors import CORSMiddleware
 
-# CORS middleware (tighten ALLOWED_ORIGINS in prod)
-raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
-ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
-# If wildcard, cannot set allow_credentials=True per browser rules
-allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
-
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-    "https://attendousa.github.io",
-    "https://attendousa.github.io/Attendo",
+# Replace these with your real front-end domains:
+ALLOWED_ORIGINS = [
+    "https://attendoface.github.io",       # your GitHub Pages org/site root
+    "https://markhanna2026.github.io",     # if you’re serving from this domain
+    # "http://localhost:5500",             # dev (example)
+    # "http://127.0.0.1:5500",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,                 # only if you use cookies or need credentials
+    allow_methods=["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+    allow_headers=["Authorization","Content-Type","Accept","Origin","X-Requested-With"],
+    expose_headers=["Authorization"],       # optional
+    max_age=86400,                          # optional: cache preflight for a day
 )
 security = HTTPBearer()
 
