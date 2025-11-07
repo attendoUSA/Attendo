@@ -42,23 +42,6 @@ DB_PASS = os.getenv("DB_PASS", "your-password")
 DB_NAME = os.getenv("DB_NAME", "face_attendance")
 INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FastAPI app FIRST, then middleware
-# ─────────────────────────────────────────────────────────────────────────────
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        # Tighten these to your real front-end origins once confirmed
-        "https://attendousa.github.io",
-        "https://attendousa.github.io/Attendo",
-        "http://localhost:5500", "http://127.0.0.1:5500",
-    ],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Face matching configuration
 FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
@@ -244,25 +227,31 @@ async def lifespan(app):
     yield
 
 app = FastAPI(lifespan=lifespan)
-
-# CORS middleware (tighten ALLOWED_ORIGINS in prod)
-raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
-ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
-# If wildcard, cannot set allow_credentials=True per browser rules
-allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
-
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
+# Allow your GitHub Pages + local dev; tighten later if you want
+ALLOWED_ORIGINS = [
+    "https://attendousa.github.io",
+    "https://attendousa.github.io/Attendo",
+    "http://localhost:5500", "http://127.0.0.1:5500",
+    "http://localhost:3000", "http://127.0.0.1:3000",
 ]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],   # includes OPTIONS
+    allow_headers=["*"],   # includes Authorization, Content-Type
 )
+
+# Health + preflight helpers
+@app.head("/")
+def head_root():
+    return Response(status_code=200)
+
+from starlette.responses import PlainTextResponse
+@app.options("/{rest_of_path:path}")
+def preflight_ok(rest_of_path: str):
+    return PlainTextResponse("", status_code=204)
+
 security = HTTPBearer()
 
 # ============= DEPENDENCY =============
