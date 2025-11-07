@@ -1,17 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://attendousa.github.io",                # your GitHub Pages root
-        "https://attendousa.github.io/Attendo",       # if the site is under /Attendo
-        "http://localhost:5500", "http://127.0.0.1:5500"  # optional local dev
-    ],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
