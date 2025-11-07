@@ -234,7 +234,7 @@ ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
 allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
 
 origins = [
-    "https://attendousa.github.io/Attendo/app.html",
+    "https://attendousa.github.io",
 ]
 
 app.add_middleware(
@@ -244,6 +244,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi.responses import RedirectResponse
+
+@app.get("/app", include_in_schema=False)
+def open_app():
+    return RedirectResponse("https://attendousa.github.io/Attendo/app.html", status_code=307)
+
 security = HTTPBearer()
 
 # ============= DEPENDENCY =============
