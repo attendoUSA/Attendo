@@ -1,3 +1,5 @@
+20202
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -12,57 +14,61 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Clean header (imports)
-# ─────────────────────────────────────────────────────────────────────────────
-import os, json, secrets, string
-from datetime import datetime, timedelta
-from typing import Optional, List
+# Load environment variables from .env file
+load_dotenv()
+import os
+import secrets
+import string
+import json  # used in register/checkin
 from collections import defaultdict
 
-from dotenv import load_dotenv
-load_dotenv()
-
-# FastAPI
-from fastapi import FastAPI, HTTPException, Depends, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-# Auth
+# JWT (PyJWT)
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
-from passlib.context import CryptContext
 
-# SQLAlchemy
-import sqlalchemy
-from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
-)
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session, relationship
 
-# Cloud SQL connector (PyMySQL)
 from google.cloud.sql.connector import Connector
 import pymysql
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────────────────────────────────────
+# ============= CONFIGURATION =============
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
+# Google Cloud SQL Configuration
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASS = os.getenv("DB_PASS", "your-password")
 DB_NAME = os.getenv("DB_NAME", "face_attendance")
 INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
 
-# Face matching configuration
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))     # stricter default
-DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))
+# ─────────────────────────────────────────────────────────────────────────────
+# FastAPI app FIRST, then middleware
+# ─────────────────────────────────────────────────────────────────────────────
+app = FastAPI()
 
-# Anti-replay nonce (in-memory; use Redis in prod)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        # Tighten these to your real front-end origins once confirmed
+        "https://attendousa.github.io",
+        "https://attendousa.github.io/Attendo",
+        "http://localhost:5500", "http://127.0.0.1:5500",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Face matching configuration
+FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
+DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
+
+# --- Anti-replay nonce (simple in-memory; use Redis in production) ---
 NONCE_TTL_SECONDS = int(os.getenv("NONCE_TTL_SECONDS", "60"))
-_nonces: dict[str, float] = {}
+_nonces: dict[str, float] = {}  # nonce -> expires_at (epoch seconds)
 
 def _now() -> float:
     from time import time as _t
@@ -79,91 +85,187 @@ def consume_nonce(nonce: Optional[str]) -> bool:
     exp = _nonces.pop(nonce, None)
     return bool(exp and exp > _now())
 
-# Simple per-user rate limit
+# --- Very small per-user rate limit (token bucket-ish) ---
 _RATE_WINDOW = int(os.getenv("RATE_WINDOW_SECONDS", "60"))
-_RATE_LIMIT  = int(os.getenv("RATE_LIMIT_CHECKINS", "20"))
-_user_hits = defaultdict(list)
+_RATE_LIMIT  = int(os.getenv("RATE_LIMIT_CHECKINS", "20"))  # X requests per window per user
+_user_hits = defaultdict(list)  # user_id -> [timestamps]
+
 def rate_limit(user_id: int):
     now = _now()
     hits = _user_hits[user_id]
+    # drop old
     _user_hits[user_id] = [t for t in hits if now - t < _RATE_WINDOW]
     if len(_user_hits[user_id]) >= _RATE_LIMIT:
         raise HTTPException(429, detail="Too many check-ins. Please wait a minute.")
     _user_hits[user_id].append(now)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DB setup
-# ─────────────────────────────────────────────────────────────────────────────
+# ============= DATABASE SETUP =============
 Base = declarative_base()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# Initialize Cloud SQL Connector
 connector = Connector()
 
 def getconn() -> pymysql.connections.Connection:
-    return connector.connect(
+    """Create database connection to Cloud SQL"""
+    conn = connector.connect(
         INSTANCE_CONNECTION_NAME,
         "pymysql",
         user=DB_USER,
         password=DB_PASS,
-        db=DB_NAME,
+        db=DB_NAME
     )
+    return conn
 
+# Create SQLAlchemy engine using Cloud SQL connector
 engine = create_engine(
     "mysql+pymysql://",
     creator=getconn,
-    pool_pre_ping=True,
-    pool_recycle=1800,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Lifespan + single app instance + CORS
-# ─────────────────────────────────────────────────────────────────────────────
+# ============= MODELS =============
+# Association table for student enrollments
+enrollments = Table(
+    'enrollments',
+    Base.metadata,
+    Column('student_id', Integer, ForeignKey('users.id'), primary_key=True),
+    Column('course_id', Integer, ForeignKey('courses.id'), primary_key=True),
+    Column('enrolled_at', DateTime, default=datetime.utcnow)
+)
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False)  # 'student', 'professor', 'admin'
+    face_embedding = Column(Text, nullable=True)
+    student_code = Column(String(20), unique=True, nullable=True)  # 👈 add this line
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    courses_taught = relationship("Course", back_populates="professor")
+    enrolled_courses = relationship("Course", secondary=enrollments, back_populates="students")
+    attendance_records = relationship("Attendance", back_populates="student")
+
+class Course(Base):
+    __tablename__ = "courses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    code = Column(String(20), unique=True, index=True, nullable=False)
+    professor_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    professor = relationship("User", back_populates="courses_taught")
+    students = relationship("User", secondary=enrollments, back_populates="enrolled_courses")
+    sessions = relationship("Session", back_populates="course")
+
+class Session(Base):
+    __tablename__ = "sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey('courses.id'), nullable=False)
+    start_time = Column(DateTime, default=datetime.utcnow)
+    end_time = Column(DateTime, nullable=True)
+    late_after_minutes = Column(Integer, default=5)
+    absent_after_minutes = Column(Integer, default=15)
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships
+    course = relationship("Course", back_populates="sessions")
+    attendance_records = relationship("Attendance", back_populates="session")
+
+class Attendance(Base):
+    __tablename__ = "attendance"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
+    student_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(20), nullable=False)  # 'present', 'late', 'absent'
+    confidence = Column(Float, nullable=True)
+    
+    # Relationships
+    session = relationship("Session", back_populates="attendance_records")
+    student = relationship("User", back_populates="attendance_records")
+
+
+# ============= PYDANTIC SCHEMAS =============
+class UserRegister(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    role: str
+    face_embedding: Optional[List[float]] = None
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class CourseCreate(BaseModel):
+    name: str
+
+class CourseEnroll(BaseModel):
+    join_code: str
+
+class SessionStart(BaseModel):
+    course_id: int
+    late_after_minutes: int = 5
+    absent_after_minutes: int = 15
+
+class CheckIn(BaseModel):
+    course_id: int
+    face_embedding: List[float]
+    liveness: bool | None = None
+    nonce: Optional[str] = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    role: str
+    name: str
+    # user_id is returned in responses (added for your frontend), but not required in schema
+
+# ============= FASTAPI APP =============
 from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app):
     try:
         Base.metadata.create_all(bind=engine)
         print("✅ Database tables checked/created.")
     except Exception as e:
         print("⚠️ Skipping DB init:", e)
     yield
-    try:
-        connector.close()
-    except Exception:
-        pass
 
 app = FastAPI(lifespan=lifespan)
 
-# Allow your GitHub Pages + local dev; tighten later if you want
-ALLOWED_ORIGINS = [
-    "https://attendousa.github.io",
-    "https://attendousa.github.io/Attendo",
-    "http://localhost:5500", "http://127.0.0.1:5500",
-    "http://localhost:3000", "http://127.0.0.1:3000",
+# CORS middleware (tighten ALLOWED_ORIGINS in prod)
+raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
+# If wildcard, cannot set allow_credentials=True per browser rules
+allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
+
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
 ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,
-    allow_methods=["*"],   # includes OPTIONS
-    allow_headers=["*"],   # includes Authorization, Content-Type
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# Health + preflight helpers
-@app.head("/")
-def head_root():
-    return Response(status_code=200)
-
-from starlette.responses import PlainTextResponse
-@app.options("/{rest_of_path:path}")
-def preflight_ok(rest_of_path: str):
-    return PlainTextResponse("", status_code=204)
-
 security = HTTPBearer()
-
 
 # ============= DEPENDENCY =============
 def get_db():
