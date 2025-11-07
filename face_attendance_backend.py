@@ -245,12 +245,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from fastapi.responses import RedirectResponse
-
-@app.get("/app", include_in_schema=False)
-def open_app():
-    return RedirectResponse("https://attendousa.github.io/Attendo/app.html", status_code=307)
-
 security = HTTPBearer()
 
 # ============= DEPENDENCY =============
