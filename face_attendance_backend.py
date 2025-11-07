@@ -44,23 +44,6 @@ DB_PASS = os.getenv("DB_PASS", "your-password")
 DB_NAME = os.getenv("DB_NAME", "face_attendance")
 INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FastAPI app FIRST, then middleware
-# ─────────────────────────────────────────────────────────────────────────────
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        # Tighten these to your real front-end origins once confirmed
-        "https://attendousa.github.io",
-        "https://attendousa.github.io/Attendo",
-        "http://localhost:5500", "http://127.0.0.1:5500",
-    ],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Face matching configuration
 FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
@@ -256,6 +239,8 @@ allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000"
+    "https://attendousa.github.io",
+    "https://attendousa.github.io/Attendo",
 ]
 
 app.add_middleware(
