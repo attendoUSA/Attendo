@@ -1,5 +1,17 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://<your-gh-username>.github.io",
+        "https://<your-gh-username>.github.io/<your-repo>",  # if your site is under a subpath
+        "http://localhost:5500", "http://127.0.0.1:5500",     # local preview (optional)
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],   # include OPTIONS for preflight
+    allow_headers=["*"],   # include Authorization, Content-Type, etc.
+)
+
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
