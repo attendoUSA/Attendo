@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://<your-gh-username>.github.io",
-        "https://<your-gh-username>.github.io/<your-repo>",  # if your site is under a subpath
-        "http://localhost:5500", "http://127.0.0.1:5500",     # local preview (optional)
+        "https://attendousa.github.io",                # your GitHub Pages root
+        "https://attendousa.github.io/Attendo",       # if the site is under /Attendo
+        "http://localhost:5500", "http://127.0.0.1:5500"  # optional local dev
     ],
     allow_credentials=False,
-    allow_methods=["*"],   # include OPTIONS for preflight
-    allow_headers=["*"],   # include Authorization, Content-Type, etc.
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
