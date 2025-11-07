@@ -234,8 +234,7 @@ ALLOWED_ORIGINS = [o.strip() for o in raw_origins.split(",") if o.strip()]
 allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
 
 origins = [
-    "https://attendousa.github.io/Attendo",
-     "https://github.com/attendoUSA/Attendo",
+    "https://attendousa.github.io/Attendo/app.html",
 ]
 
 app.add_middleware(
