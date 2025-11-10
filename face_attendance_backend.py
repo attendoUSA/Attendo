@@ -235,6 +235,7 @@ allow_creds = not (len(ALLOWED_ORIGINS) == 1 and ALLOWED_ORIGINS[0] == "*")
 
 origins = [
     "https://attendousa.github.io",
+    "https://attendo-ojjl.onrender.com"
 ]
 
 app.add_middleware(
