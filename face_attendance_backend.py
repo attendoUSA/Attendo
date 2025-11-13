@@ -188,8 +188,9 @@ class Token(BaseModel):
 
 # ============= FASTAPI APP =============
 # ============= FASTAPI APP =============
+
 #CHANGES 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 # CORS middleware (tighten ALLOWED_ORIGINS in prod)
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
