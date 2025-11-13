@@ -314,22 +314,6 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     if user_data.face_embedding:
         norm_emb = l2_normalize(user_data.face_embedding)
 
-        # Duplicate-face check
-        existing_with_face = db.query(User).filter(User.face_embedding.isnot(None)).all()
-        for u in existing_with_face:
-            try:
-                other = json.loads(u.face_embedding)
-            except Exception:
-                continue
-            sim = cosine_similarity(norm_emb, l2_normalize(other))
-            if sim >= DUPLICATE_FACE_THRESHOLD:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Face already registered to another account ({u.email})."
-                )
-
-        face_str = json.dumps(norm_emb)
-    
     # Create user
     user = User(
         name=user_data.name,
