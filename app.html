@@ -687,7 +687,7 @@ $('#btnCreate').onclick = async () => {
             return;
         }
         try {
-            const vec = await embeddingFromImage(img);
+            const vec = await embeddingFromImageElement(img);
             payload.face_embedding = vec;
         } catch (e) {
             $('#createMsg').textContent = 'No face detected in photo';
