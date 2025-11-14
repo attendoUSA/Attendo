@@ -37,17 +37,18 @@
             <h1>Contact Us</h1>
             <p>We'd love to hear from you! Whether you're a professor, student, or organization, reach out for questions or support.</p>
 
-            <form class="contact-form">
-                <label>Name:</label>
-                <input type="text" placeholder="Your name" required>
+            <form id="contactForm" class="contact-form">
+                <label for="contactName">Name:</label>
+                <input id="contactName" type="text" placeholder="Your name" required>
 
-                <label>Email:</label>
-                <input type="email" placeholder="Your email" required>
+                <label for="contactEmail">Email:</label>
+                <input id="contactEmail" type="email" placeholder="Your email" required>
 
-                <label>Message:</label>
-                <textarea placeholder="Write your message here..." rows="5" required></textarea>
+                <label for="contactMessage">Message:</label>
+                <textarea id="contactMessage" placeholder="Write your message here..." rows="5" required></textarea>
 
                 <button type="submit" class="btn-primary">Send Message</button>
+                <p id="contactStatus" style="margin-top: 0.75rem; font-size: 0.95rem;"></p>
             </form>
         </section>
     </main>
@@ -57,7 +58,9 @@
     </footer>
 
     <script>
-        // Hamburger menu
+        // =========================
+        // Nav + theme handling
+        // =========================
         const menuToggle = document.getElementById('menuToggle');
         const navMenu = document.getElementById('navMenu');
         
@@ -80,7 +83,6 @@
             });
         });
         
-
         window.addEventListener("load", () => {
             document.body.classList.add("loaded");
             document.querySelectorAll(".fade-up").forEach(el => el.classList.add("visible"));
@@ -112,6 +114,47 @@
         });
 
         initTheme();
+
+        // =========================
+        // Contact form → backend
+        // =========================
+        const contactForm = document.getElementById('contactForm');
+        const contactStatus = document.getElementById('contactStatus');
+
+        contactForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            contactStatus.textContent = "Sending your message...";
+            contactStatus.style.color = "#ccc";
+
+            const payload = {
+                name: document.getElementById('contactName').value.trim(),
+                email: document.getElementById('contactEmail').value.trim(),
+                message: document.getElementById('contactMessage').value.trim(),
+            };
+
+            try {
+                const res = await fetch('http://127.0.0.1:8000/contact/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.detail || "Failed to send message");
+                }
+
+                contactStatus.textContent = "Message sent! We'll get back to you soon.";
+                contactStatus.style.color = "#4ade80"; // green-ish
+                contactForm.reset();
+            } catch (err) {
+                console.error(err);
+                contactStatus.textContent = "Error sending message. Please try again.";
+                contactStatus.style.color = "#f97373"; // red-ish
+            }
+        });
     </script>
 </body>
 </html>
+
