@@ -19,13 +19,15 @@ import secrets
 import string
 import json  # used in register/checkin
 import random
+import smtplib                         # (Jenish note) Added SMTP module for sending emails
+from email.mime.text import MIMEText    # (Jenish note) Added MIMEText to format email bodies
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, ForeignKey, Boolean, Text, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from google.cloud.sql.connector import Connector
 import pymysql
 
-ET = ZoneInfo("US/Eastern")
+ET = ZoneInfo("America/New_York")
 # ============= CONFIGURATION =============
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
@@ -40,6 +42,34 @@ INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region
 # Face matching configuration
 FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.93"))  # stricter default
 DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
+
+# =======================
+# Email (SMTP) – Jenish note
+# =======================
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_FROM = os.getenv("EMAIL_FROM", EMAIL_USER)
+
+def send_email(to_email: str, subject: str, message: str):
+    """
+    (Jenish note) Helper to send simple text emails via Gmail SMTP.
+    Uses the credentials from .env (EMAIL_USER, EMAIL_PASS, etc.).
+    """
+    if not EMAIL_USER or not EMAIL_PASS:
+        # If env vars are missing, fail loudly so Jenish sees it in logs
+        raise RuntimeError("SMTP not configured: missing EMAIL_USER or EMAIL_PASS")
+
+    msg = MIMEText(message)
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = to_email
+
+    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
 
 # ============= DATABASE SETUP =============
 Base = declarative_base()
@@ -188,8 +218,6 @@ class Token(BaseModel):
 
 # ============= FASTAPI APP =============
 # ============= FASTAPI APP =============
-
-#CHANGES 
 app = FastAPI(title="Face Attendance API")
 
 # CORS middleware (tighten ALLOWED_ORIGINS in prod)
@@ -314,7 +342,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     if user_data.face_embedding:
         norm_emb = l2_normalize(user_data.face_embedding)
 
-        # Duplicate-face check
+         # Duplicate-face check
         existing_with_face = db.query(User).filter(User.face_embedding.isnot(None)).all()
         for u in existing_with_face:
             try:
@@ -343,7 +371,24 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    
+
+    # ============================================================
+    # (Jenish note) Added welcome-email trigger after user is saved
+    # ============================================================
+    try:
+        role_label = "Professor" if user.role == "professor" else "Student"
+        subject = f"Welcome to Attendo, {user.name}!"
+        body = (
+            f"Hi {user.name},\n\n"
+            f"Welcome to Attendo as a {role_label}.\n"
+            f"Your account was created successfully.\n\n"
+            f"— Attendo System"
+        )
+        send_email(user.email, subject, body)
+    except Exception as e:
+        # (Jenish note) Email failure should NOT block registration
+        print(f"[Jenish note] Welcome email failed to send: {e}")
+
     # Create token
     token = create_access_token({"user_id": user.id, "role": user.role, "student_id": student_id})
     
@@ -354,6 +399,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
         "name": user.name,
         "student_id": student_id
     }
+
 @app.post("/auth/login", response_model=Token)
 def login(credentials: UserLogin, db: Session = Depends(get_db)):
     """Login user"""
@@ -437,27 +483,54 @@ def update_student_id(
         "student_id": new_id,
         "can_edit_again": False
     }
+
 @app.post("/courses/create")
-def create_course(course_data: CourseCreate, token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
+def create_course(
+    course_data: CourseCreate,
+    token_data: dict = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
     """Create a new course (professors only)"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can create courses")
-    
+
+    # (Jenish note) Load professor from DB so we have their email/name
+    professor = db.query(User).filter(User.id == token_data["user_id"]).first()
+    if not professor:
+        raise HTTPException(status_code=404, detail="Professor account not found")
+
     join_code = generate_join_code()
-    
+
     # Ensure join code is unique
     while db.query(Course).filter(Course.code == join_code).first():
         join_code = generate_join_code()
-    
+
     course = Course(
         name=course_data.name,
         code=join_code,
-        professor_id=token_data["user_id"]
+        professor_id=token_data["user_id"],
     )
     db.add(course)
     db.commit()
     db.refresh(course)
-    
+
+    # (Jenish note) Send course-creation confirmation email to professor
+    try:
+        subject = f"Attendo: Course Created – {course.name}"
+        body = (
+            f"Hi {professor.name},\n\n"
+            f"Your new course has been created successfully in Attendo.\n\n"
+            f"Course Name: {course.name}\n"
+            f"Join Code: {join_code}\n"
+            f"Course ID: {course.id}\n\n"
+            f"Share this join code with students so they can enroll.\n\n"
+            f"— Attendo System"
+        )
+        send_email(professor.email, subject, body)
+    except Exception as e:
+        # (Jenish note) Don't break course creation if email fails – just log
+        print(f"[Jenish note] Failed to send course creation email: {e}")
+
     return {"course_id": course.id, "name": course.name, "join_code": join_code}
 
 @app.get("/courses/my-taught")
@@ -584,7 +657,9 @@ def delete_course(course_id: int, token_data: dict = Depends(verify_token), db: 
     
 @app.post("/sessions/start")
 def start_session(session_data: SessionStart, token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
-    """Start an attendance session (professors only)"""
+    """Start an attendance session (professors only)
+    (Jenish note) No email is sent on start; summary is sent when session ends.
+    """
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can start sessions")
     
@@ -594,7 +669,10 @@ def start_session(session_data: SessionStart, token_data: dict = Depends(verify_
         raise HTTPException(status_code=403, detail="Not authorized for this course")
     
     # End any active sessions for this course
-    db.query(Session).filter(Session.course_id == session_data.course_id, Session.is_active == True).update(
+    db.query(Session).filter(
+        Session.course_id == session_data.course_id,
+        Session.is_active == True
+    ).update(
         {"is_active": False, "end_time": datetime.now(ET)}
     )
     
@@ -607,8 +685,12 @@ def start_session(session_data: SessionStart, token_data: dict = Depends(verify_
     db.add(session)
     db.commit()
     db.refresh(session)
-    
+
+    # (Jenish note) No SMTP/email call here by design
+
     return {"session_id": session.id, "course_name": course.name}
+
+
 
 @app.post("/sessions/stop/{session_id}")
 def stop_session(session_id: int, token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
@@ -625,12 +707,15 @@ def stop_session(session_id: int, token_data: dict = Depends(verify_token), db: 
     if course.professor_id != token_data["user_id"]:
         raise HTTPException(status_code=403, detail="Not authorized for this session")
     
+    # End session
     session.is_active = False
     session.end_time = datetime.now(ET)
     
     # Mark absent students
     enrolled_students = course.students
-    checked_in_students = db.query(Attendance.student_id).filter(Attendance.session_id == session_id).all()
+    checked_in_students = db.query(Attendance.student_id).filter(
+        Attendance.session_id == session_id
+    ).all()
     checked_in_ids = [s[0] for s in checked_in_students]
     
     for student in enrolled_students:
@@ -639,13 +724,71 @@ def stop_session(session_id: int, token_data: dict = Depends(verify_token), db: 
                 session_id=session_id,
                 student_id=student.id,
                 status="absent",
-                timestamp=datetime.now(ET)  # Add explicit timestamp
+                timestamp=datetime.now(ET)  # explicit timestamp
             )
             db.add(attendance)
     
     db.commit()
-    
-    return {"message": "Session stopped", "absent_marked": len(enrolled_students) - len(checked_in_ids)}
+
+    # ==========================
+    # Session summary email (Jenish note)
+    # ==========================
+
+    # Pull full attendance records for this session (with student names)
+    records = db.query(Attendance).filter(
+        Attendance.session_id == session_id
+    ).all()
+
+    # Totals based on actual records (Jenish note: now includes total late)
+    total_enrolled = len(enrolled_students)
+    total_checked_in = sum(1 for r in records if r.status != "absent")
+    total_absent = sum(1 for r in records if r.status == "absent")
+    total_late = sum(1 for r in records if r.status == "late")
+
+    lines = []
+    for r in records:
+        sid = r.student.student_id or f"User#{r.student.id}"
+        lines.append(f"{sid} – {r.student.name} – {r.status}")
+
+    details_block = "\n".join(lines) if lines else "No check-ins recorded."
+
+    # Get professor user to email them
+    professor = db.query(User).filter(User.id == course.professor_id).first()
+
+    subject = f"Attendo: Session ended – {course.name}"
+    body = f"""Hi {professor.name},
+
+Your attendance session for '{course.name}' has ended.
+
+Session ID: {session.id}
+
+Late after: {session.late_after_minutes} minutes
+Absent after: {session.absent_after_minutes} minutes
+
+Total enrolled: {total_enrolled}
+Total checked in: {total_checked_in}
+Total late: {total_late}
+Total marked absent: {total_absent}
+
+Detailed attendance:
+{details_block}
+
+— Attendo System
+"""
+
+    try:
+        # (Jenish note) Email summary to professor when a session ends
+        send_email(professor.email, subject, body)
+    except Exception as e:
+        # (Jenish note) Don't break API if email fails, just log
+        print(f"[Email error] Failed to send session summary: {e}")
+
+    return {
+        "message": "Session stopped",
+        "absent_marked": total_absent
+    }
+
+
 
 @app.get("/sessions/active")
 def get_active_session(course_id: int, db: Session = Depends(get_db)):
@@ -698,7 +841,7 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
     similarity = cosine_similarity(normalized_input, stored_embedding)
     
     if similarity < FACE_MATCH_THRESHOLD:
-        raise HTTPException(status_code=403, detail=f"Face verification failed!")
+        raise HTTPException(status_code=403, detail=f"Face verification failed (confidence: {similarity:.2%})")
     
     # Determine status based on time
     # Determine status based on time
@@ -929,6 +1072,39 @@ def delete_all_students_data(token_data: dict = Depends(verify_token), db: Sessi
         "message": f"Successfully deleted face embeddings and enrollments for all students",
         "deleted_count": deleted_count
     }
+
+# ============================
+# Contact Form -> Email (Jenish note)
+# ============================
+
+class ContactMessage(BaseModel):
+    name: str
+    email: str
+    message: str
+
+
+@app.post("/contact/send")
+def send_contact_message(data: ContactMessage):
+    """
+    (Jenish note) Sends contact form message directly to attendo.notify@gmail.com
+    """
+    admin_email = EMAIL_USER  # This will be attendo.notify@gmail.com
+
+    subject = f"New Contact Form Message from {data.name}"
+    body = f"""
+Name: {data.name}
+Email: {data.email}
+
+Message:
+{data.message}
+
+— Sent from Attendo Contact Page
+"""
+
+    # Use the existing SMTP helper
+    send_email(admin_email, subject, body)
+
+    return {"message": "Message sent successfully"}
 
 if __name__ == "__main__":
     import uvicorn
