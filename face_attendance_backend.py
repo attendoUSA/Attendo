@@ -26,6 +26,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from google.cloud.sql.connector import Connector
 import pymysql
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 ET = ZoneInfo("America/New_York")
 # ============= CONFIGURATION =============
