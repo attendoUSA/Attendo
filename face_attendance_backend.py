@@ -1080,24 +1080,18 @@ def delete_all_students_data(token_data: dict = Depends(verify_token), db: Sessi
 # Contact Form -> Email (Jenish note)
 # ============================
 
+
 class ContactMessage(BaseModel):
     name: str
     email: str
     message: str
 
-
 @app.post("/contact/send")
 def send_contact_message(data: ContactMessage):
     """
-    Sends contact form message directly to attendo.notify@gmail.com (or EMAIL_USER).
+    (Jenish note) Sends contact form message directly to attendo.notify@gmail.com
     """
-    # Fallback: if EMAIL_USER is not set, hard-code your admin email
-    admin_email = EMAIL_USER or "attendo.notify@gmail.com"
-
-    if not admin_email:
-        # This will show clearly in logs instead of silently failing
-        print("[CONTACT] ERROR: admin_email is not set (EMAIL_USER missing).")
-        raise HTTPException(status_code=500, detail="Contact email not configured")
+    admin_email = EMAIL_USER  # This will be attendo.notify@gmail.com
 
     subject = f"New Contact Form Message from {data.name}"
     body = f"""
@@ -1110,16 +1104,10 @@ Message:
 — Sent from Attendo Contact Page
 """
 
-    try:
-        print(f"[CONTACT] Attempting to send email to {admin_email} from {data.email}")
-        send_email(admin_email, subject, body)
-        print("[CONTACT] Email sent successfully")
-        return {"message": "Message sent successfully"}
-    except Exception as e:
-        # This will show up in your Render logs so we know EXACTLY why it failed
-        print(f"[CONTACT] Error sending contact email: {e}")
-        raise HTTPException(status_code=500, detail="Failed to send contact message")
+    # Use the existing SMTP helper
+    send_email(admin_email, subject, body)
 
+    return {"message": "Message sent successfully"}
 
 if __name__ == "__main__":
     import uvicorn
