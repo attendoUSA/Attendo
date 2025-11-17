@@ -6,6 +6,152 @@
     <title>Attendo | Attendance System</title>
     <link rel="stylesheet" href="style.css">
     <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        /* Moderator Panel Styles */
+        .moderator-header {
+            background: linear-gradient(135deg, #f59e0b 0%, #ff865a 100%);
+            padding: 2rem;
+            border-radius: 12px;
+            color: white;
+            margin-bottom: 2rem;
+        }
+
+        .moderator-header h2 {
+            margin: 0 0 0.5rem 0;
+            font-size: 2rem;
+        }
+
+        .moderator-header .small {
+            color: rgba(255,255,255,0.9);
+            margin: 0;
+        }
+
+        .stats-grid-mod {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--card-bg, #1a1a1a);
+            padding: 1.5rem;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid var(--border-color, #333);
+        }
+
+        [data-theme="light"] .stat-card {
+            background: #f8f9fa;
+            border-color: #dee2e6;
+        }
+
+        .stat-card h3 {
+            font-size: 2.5rem;
+            margin: 0 0 0.5rem 0;
+            color: #f59e0b;
+            font-weight: 700;
+        }
+
+        .stat-card p {
+            margin: 0;
+            color: var(--text-secondary, #999);
+            font-size: 0.9rem;
+        }
+
+        .danger-zone {
+            background: rgba(220, 38, 38, 0.1);
+            border: 2px solid rgba(220, 38, 38, 0.3);
+            border-radius: 8px;
+            padding: 2rem;
+        }
+
+        .danger-zone h3 {
+            color: #dc2626;
+            margin-top: 0;
+        }
+
+        .btn-sm {
+            padding: 0.4rem 0.8rem;
+            font-size: 0.875rem;
+            margin-right: 0.5rem;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            background: linear-gradient(135deg, #f59e0b 0%, #ff8b61 100%);
+            color: white;
+        }
+
+        .btn-sm:hover {
+            background: linear-gradient(135deg, #fbbf24 0%, #ff9b5c 100%);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            background: linear-gradient(135deg, #f59e0b 0%, #ff8b61 100%);
+            color: white;
+        }
+
+        .table-container {
+            max-height: 500px;
+            overflow-y: auto;
+            overflow-x: auto;
+        }
+
+        /* Better table spacing for moderator panel */
+        #moderatorDash .table {
+            width: 100%;
+            table-layout: auto;
+        }
+
+        #moderatorDash .table th,
+        #moderatorDash .table td {
+            padding: 1rem;
+            white-space: nowrap;
+        }
+
+        /* Code styling for join codes */
+        code {
+            background: rgba(245, 158, 11, 0.2);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            color: #f59e0b;
+            font-weight: 600;
+        }
+
+        [data-theme="light"] code {
+            background: rgba(245, 158, 11, 0.15);
+        }
+
+        /* Dashboard tabs spacing */
+        .tabs.mb-3 {
+            margin-bottom: 2rem;
+        }
+
+        /* Dashboard tabs wrapper */
+        .dashboard-tabs-wrapper {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 0 32px 0 32px;
+        }
+
+        /* Make moderator dashboard wider */
+        #moderatorDash {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        /* Override app-container width for better moderator display */
+        #moderatorDash .table-container {
+            overflow-x: auto;
+        }
+    </style>
 </head>
 <body>
     <header>
@@ -114,6 +260,14 @@
             </section>
 
             <!-- Admin Dashboard -->
+            <!-- Dashboard Tabs Container (shown when logged in as professor) -->
+            <div class="dashboard-tabs-wrapper hidden" id="dashboardTabsWrapper">
+                <div class="tabs center mb-3" id="dashboardTabs">
+                    <button class="tab active" id="tabAdminView">Admin Dashboard</button>
+                    <button class="tab hidden" id="tabModeratorView">🛡️ Super Admin</button>
+                </div>
+            </div>
+
             <section class="card hidden" id="adminDash">
                 <h2>Admin Dashboard</h2>
                 <div class="grid grid-2">
@@ -294,6 +448,113 @@
                     </table>
                 </div>
             </section>
+
+            <!-- Moderator Dashboard -->
+            <section class="card hidden" id="moderatorDash">
+                <div class="moderator-header">
+                    <h2>🛡️ Super Admin / Moderator Panel</h2>
+                    <p class="small">God mode: Full system access</p>
+                </div>
+
+                <!-- System Stats -->
+                <div class="stats-grid-mod">
+                    <div class="stat-card">
+                        <h3 id="statTotalUsers">0</h3>
+                        <p>Total Users</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="statStudents">0</h3>
+                        <p>Students</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="statProfessors">0</h3>
+                        <p>Professors</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="statCourses">0</h3>
+                        <p>Courses</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="statSessions">0</h3>
+                        <p>Sessions</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="statAttendance">0</h3>
+                        <p>Check-ins</p>
+                    </div>
+                </div>
+
+                <!-- All Users -->
+                <div class="mt-3">
+                    <h3>All Users</h3>
+                    <div class="search-box">
+                        <input class="input" id="modUserSearch" placeholder="Search users..." />
+                    </div>
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th>Role</th>
+                                    <th>Student ID</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modUserRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- All Courses -->
+                <div class="mt-3">
+                    <h3>All Courses</h3>
+                    <div class="search-box">
+                        <input class="input" id="modCourseSearch" placeholder="Search courses..." />
+                    </div>
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Course Name</th>
+                                    <th>Join Code</th>
+                                    <th>Professor</th>
+                                    <th>Students</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modCourseRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Recent Attendance -->
+                <div class="mt-3">
+                    <h3>Recent Attendance (Last 100)</h3>
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Student</th>
+                                    <th>Course</th>
+                                    <th>Professor</th>
+                                    <th>Time</th>
+                                    <th>Status</th>
+                                    <th>Confidence</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modAttendanceRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Danger Zone -->
+                <div class="mt-3 danger-zone">
+                    <h3>⚠️ Danger Zone</h3>
+                    <button class="btn-danger" id="btnCleanup">Clean Up Test Data</button>
+                    <p class="small">This will delete all attendance records and sessions</p>
+                </div>
+            </section>
         </div>
     </main>
 
@@ -402,7 +663,7 @@
 /* =========================
    GLOBALS
    ========================= */
-const API = 'https://attendo-ojjl.onrender.com';
+const API = 'http://localhost:8000';
 let role = null, username = null, studentId = null, activeSessionId = null, activeCourseId = null;
 let adminCourses = [], studentCourses = [], allAttendance = [], studentAttendance = [];
 let modalVideoStream = null;
@@ -687,7 +948,7 @@ $('#btnCreate').onclick = async () => {
             return;
         }
         try {
-            const vec = await embeddingFromImageElement(img);
+            const vec = await embeddingFromImage(img);
             payload.face_embedding = vec;
         } catch (e) {
             $('#createMsg').textContent = 'No face detected in photo';
@@ -742,10 +1003,26 @@ $('#btnLogout').onclick = () => {
     show('#btnLogout', false);
     show('#adminDash', false);
     show('#studentDash', false);
+    show('#moderatorDash', false);
+    show('#dashboardTabsWrapper', false);
     show('#landing', true);
     role = null;
     username = null;
     studentId = null;
+    
+    // Reset tabs
+    if (typeof isSuperAdmin !== 'undefined') {
+        isSuperAdmin = false;
+    }
+    const tabModeratorView = document.getElementById('tabModeratorView');
+    const tabAdminView = document.getElementById('tabAdminView');
+    if (tabModeratorView) {
+        show('#tabModeratorView', false);
+        tabModeratorView.classList.remove('active');
+    }
+    if (tabAdminView) {
+        tabAdminView.classList.add('active');
+    }
 };
 
 /* =========================
@@ -755,6 +1032,7 @@ async function loadAdmin() {
     show('#adminDash', true);
     await refreshAdminCourses();
     refreshAttendanceHistory();
+    checkSuperAdminAccess(); // Check if user has super admin access
 }
 
 async function refreshAdminCourses() {
@@ -1464,6 +1742,247 @@ window.addEventListener("scroll", () => {
         header.classList.remove("scrolled");
     }
 });
+
+// ============= MODERATOR PANEL & TAB SYSTEM =============
+
+let isSuperAdmin = false;
+
+// Setup dashboard tab switching
+function setupDashboardTabs() {
+    const adminDash = $('#adminDash');
+    const moderatorDash = $('#moderatorDash');
+    const dashboardTabsWrapper = $('#dashboardTabsWrapper');
+    const tabAdminView = $('#tabAdminView');
+    const tabModeratorView = $('#tabModeratorView');
+    
+    // Show tabs wrapper
+    show('#dashboardTabsWrapper', true);
+    
+    // Tab click handlers
+    tabAdminView.onclick = () => {
+        // Switch tabs
+        tabAdminView.classList.add('active');
+        tabModeratorView.classList.remove('active');
+        
+        // Show/hide content
+        show('#adminDash', true);
+        show('#moderatorDash', false);
+    };
+    
+    tabModeratorView.onclick = () => {
+        // Switch tabs
+        tabModeratorView.classList.add('active');
+        tabAdminView.classList.remove('active');
+        
+        // Show/hide content
+        show('#adminDash', false);
+        show('#moderatorDash', true);
+        
+        // Refresh moderator data
+        loadModeratorPanel();
+    };
+}
+
+async function checkSuperAdminAccess() {
+    try {
+        const info = await api('/user/info', 'GET');
+        isSuperAdmin = info.is_super_admin || false;
+        
+        if (info.role === 'professor') {
+            // Setup tab system for all professors
+            setupDashboardTabs();
+            
+            if (isSuperAdmin) {
+                // Show the super admin tab
+                show('#tabModeratorView', true);
+                
+                // Load moderator data
+                loadModeratorPanel();
+            }
+        }
+    } catch (e) {
+        console.log('Not super admin or error checking:', e);
+    }
+}
+
+async function loadModeratorPanel() {
+    await Promise.all([
+        loadModStats(),
+        loadModUsers(),
+        loadModCourses(),
+        loadModAttendance()
+    ]);
+}
+
+async function loadModStats() {
+    try {
+        const stats = await api('/moderator/stats', 'GET');
+        $('#statTotalUsers').textContent = stats.total_users;
+        $('#statStudents').textContent = stats.total_students;
+        $('#statProfessors').textContent = stats.total_professors;
+        $('#statCourses').textContent = stats.total_courses;
+        $('#statSessions').textContent = stats.total_sessions;
+        $('#statAttendance').textContent = stats.total_attendance_records;
+    } catch (e) {
+        console.error('Failed to load stats:', e);
+    }
+}
+
+async function loadModUsers() {
+    try {
+        const users = await api('/moderator/users', 'GET');
+        const tbody = $('#modUserRows');
+        tbody.innerHTML = '';
+        
+        users.forEach(user => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${user.name}</td>
+                <td>${user.email}</td>
+                <td><span class="badge">${user.role}</span></td>
+                <td>${user.student_id || '-'}</td>
+                <td>
+                    ${user.role === 'student' ? 
+                        `<button class="btn-sm" onclick="promoteToProf(${user.id})">Make Prof</button>` : 
+                        ''
+                    }
+                    <button class="btn-danger btn-sm" onclick="deleteUser(${user.id}, '${user.name.replace(/'/g, "\\'")}')">Delete</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+        
+        setupSearch('#modUserSearch', '#modUserRows');
+    } catch (e) {
+        console.error('Failed to load users:', e);
+    }
+}
+
+async function loadModCourses() {
+    try {
+        const courses = await api('/moderator/courses', 'GET');
+        const tbody = $('#modCourseRows');
+        tbody.innerHTML = '';
+        
+        courses.forEach(course => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${course.name}</strong></td>
+                <td><code>${course.code}</code></td>
+                <td>${course.professor_name}<br><small>${course.professor_email}</small></td>
+                <td>${course.student_count} students</td>
+                <td>
+                    <button class="btn-danger btn-sm" onclick="deleteCourse(${course.id}, '${course.name.replace(/'/g, "\\'")}')">Delete</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+        
+        setupSearch('#modCourseSearch', '#modCourseRows');
+    } catch (e) {
+        console.error('Failed to load courses:', e);
+    }
+}
+
+async function loadModAttendance() {
+    try {
+        const records = await api('/moderator/attendance/all', 'GET');
+        const tbody = $('#modAttendanceRows');
+        tbody.innerHTML = '';
+        
+        records.forEach(r => {
+            const tr = document.createElement('tr');
+            const time = new Date(r.timestamp).toLocaleString();
+            tr.innerHTML = `
+                <td>${r.student_name}<br><small>${r.student_id}</small></td>
+                <td>${r.course_name}</td>
+                <td>${r.professor_name}</td>
+                <td>${time}</td>
+                <td><span class="badge">${r.status}</span></td>
+                <td>${(r.confidence * 100).toFixed(1)}%</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        console.error('Failed to load attendance:', e);
+    }
+}
+
+async function deleteUser(userId, userName) {
+    if (!confirm(`Are you sure you want to DELETE ${userName}? This cannot be undone!`)) {
+        return;
+    }
+    
+    try {
+        await api(`/moderator/user/${userId}`, 'DELETE');
+        showNotification('Success', `${userName} deleted`, 'success');
+        loadModeratorPanel();
+    } catch (e) {
+        showNotification('Error', e.message, 'error');
+    }
+}
+
+async function deleteCourse(courseId, courseName) {
+    if (!confirm(`Delete ${courseName}? This will remove all sessions and attendance data!`)) {
+        return;
+    }
+    
+    try {
+        await api(`/moderator/course/${courseId}`, 'DELETE');
+        showNotification('Success', `${courseName} deleted`, 'success');
+        loadModeratorPanel();
+    } catch (e) {
+        showNotification('Error', e.message, 'error');
+    }
+}
+
+async function promoteToProf(userId) {
+    if (!confirm('Promote this student to professor? This will clear their student data.')) {
+        return;
+    }
+    
+    try {
+        await api(`/moderator/make-professor/${userId}`, 'POST');
+        showNotification('Success', 'User promoted to professor', 'success');
+        loadModeratorPanel();
+    } catch (e) {
+        showNotification('Error', e.message, 'error');
+    }
+}
+
+const cleanupBtn = document.getElementById('btnCleanup');
+if (cleanupBtn) {
+    cleanupBtn.onclick = async () => {
+        const confirm1 = prompt('Type "DELETE" to confirm cleanup (this will delete all attendance and sessions):');
+        if (confirm1 !== 'DELETE') return;
+        
+        try {
+            const result = await api('/moderator/cleanup', 'POST');
+            showNotification('Success', result.message, 'success');
+            loadModeratorPanel();
+        } catch (e) {
+            showNotification('Error', e.message, 'error');
+        }
+    };
+}
+
+// Helper: Setup table search
+function setupSearch(searchId, tableBodyId) {
+    const searchInput = document.querySelector(searchId);
+    const tableBody = document.querySelector(tableBodyId);
+    
+    if (!searchInput || !tableBody) return;
+    
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value.toLowerCase();
+        const rows = tableBody.querySelectorAll('tr');
+        
+        rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.includes(query) ? '' : 'none';
+        });
+    });
+}
     </script>
 </body>
 </html>
