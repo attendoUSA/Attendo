@@ -43,6 +43,9 @@ INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region
 FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.93"))  # stricter default
 DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
 
+# Super Admin Configuration
+SUPER_ADMIN_EMAIL = os.getenv("SUPER_ADMIN_EMAIL", "your.email@umass.edu")
+
 # =======================
 # Email (Resend API)
 # =======================
@@ -303,6 +306,22 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
         return 0.0
     return dot_product / (mag1 * mag2)
 
+def is_super_admin(email: str) -> bool:
+    """Check if user is the super admin"""
+    admin_emails = [e.strip().lower() for e in SUPER_ADMIN_EMAIL.split(',')]
+    return email.lower() in admin_emails
+
+def verify_super_admin(token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
+    """Verify user is super admin"""
+    user = db.query(User).filter(User.id == token_data["user_id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not is_super_admin(user.email):
+        raise HTTPException(status_code=403, detail="Super admin access required")
+    
+    return user
+
 # ============= ROUTES =============
 @app.get("/")
 def root():
@@ -433,7 +452,8 @@ def get_user_info(token_data: dict = Depends(verify_token), db: Session = Depend
         "name": user.name,
         "email": user.email,
         "role": user.role,
-        "student_id": user.student_id
+        "student_id": user.student_id,
+        "is_super_admin": is_super_admin(user.email)
     }
     
     # Add edit status for students
@@ -442,6 +462,7 @@ def get_user_info(token_data: dict = Depends(verify_token), db: Session = Depend
         response["can_edit_student_id"] = not user.student_id_edited
     
     return response
+
 @app.put("/user/student-id")
 def update_student_id(
     update_data: StudentIdUpdate,
@@ -520,7 +541,7 @@ def create_course(
 
     # (Jenish note) Send course-creation confirmation email to professor
     try:
-        subject = f"Attendo: Course Created – {course.name}"
+        subject = f"Attendo: Course Created — {course.name}"
         body = (
             f"Hi {professor.name},\n\n"
             f"Your new course has been created successfully in Attendo.\n\n"
@@ -532,7 +553,7 @@ def create_course(
         )
         send_email(professor.email, subject, body)
     except Exception as e:
-        # (Jenish note) Don't break course creation if email fails – just log
+        # (Jenish note) Don't break course creation if email fails — just log
         print(f"[Jenish note] Failed to send course creation email: {e}")
 
     return {"course_id": course.id, "name": course.name, "join_code": join_code}
@@ -615,14 +636,6 @@ def get_course_roster(course_id: int, token_data: dict = Depends(verify_token), 
         for s in course.students
     ]
 
-# ... existing code ...
-
-@app.get("/courses/{course_id}/roster")
-def get_course_roster(course_id: int, token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
-    """Get list of enrolled students with their IDs for a course (professors only)"""
-    # ... existing code ...
-
-# ADD THE NEW DELETE ENDPOINT HERE:
 @app.delete("/courses/{course_id}")
 def delete_course(course_id: int, token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
     """Delete a course and all related data (professors only)"""
@@ -752,14 +765,14 @@ def stop_session(session_id: int, token_data: dict = Depends(verify_token), db: 
     lines = []
     for r in records:
         sid = r.student.student_id or f"User#{r.student.id}"
-        lines.append(f"{sid} – {r.student.name} – {r.status}")
+        lines.append(f"{sid} — {r.student.name} — {r.status}")
 
     details_block = "\n".join(lines) if lines else "No check-ins recorded."
 
     # Get professor user to email them
     professor = db.query(User).filter(User.id == course.professor_id).first()
 
-    subject = f"Attendo: Session ended – {course.name}"
+    subject = f"Attendo: Session ended — {course.name}"
     body = f"""Hi {professor.name},
 
 Your attendance session for '{course.name}' has ended.
@@ -847,7 +860,6 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
     if similarity < FACE_MATCH_THRESHOLD:
         raise HTTPException(status_code=403, detail=f"Face verification failed (confidence: {similarity:.2%})")
     
-    # Determine status based on time
     # Determine status based on time
     start_time = session.start_time if session.start_time.tzinfo else session.start_time.replace(tzinfo=ET)
     elapsed_minutes = (datetime.now(ET) - start_time).total_seconds() / 60
@@ -1075,6 +1087,214 @@ def delete_all_students_data(token_data: dict = Depends(verify_token), db: Sessi
     return {
         "message": f"Successfully deleted face embeddings and enrollments for all students",
         "deleted_count": deleted_count
+    }
+
+# ============================
+# MODERATOR / SUPER ADMIN ENDPOINTS
+# ============================
+
+@app.get("/moderator/stats")
+def get_system_stats(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
+    """Get system-wide statistics"""
+    total_users = db.query(User).count()
+    total_students = db.query(User).filter(User.role == 'student').count()
+    total_professors = db.query(User).filter(User.role == 'professor').count()
+    total_courses = db.query(Course).count()
+    total_sessions = db.query(Session).count()
+    total_attendance = db.query(Attendance).count()
+    
+    # Get recent registrations
+    recent_users = db.query(User).order_by(User.created_at.desc()).limit(5).all()
+    
+    return {
+        "total_users": total_users,
+        "total_students": total_students,
+        "total_professors": total_professors,
+        "total_courses": total_courses,
+        "total_sessions": total_sessions,
+        "total_attendance_records": total_attendance,
+        "recent_users": [
+            {
+                "id": u.id,
+                "name": u.name,
+                "email": u.email,
+                "role": u.role,
+                "created_at": u.created_at.isoformat()
+            }
+            for u in recent_users
+        ]
+    }
+
+@app.get("/moderator/users")
+def get_all_users(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
+    """Get all users in the system"""
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    
+    return [
+        {
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+            "role": u.role,
+            "student_id": u.student_id,
+            "has_face": u.face_embedding is not None,
+            "created_at": u.created_at.isoformat()
+        }
+        for u in users
+    ]
+
+@app.get("/moderator/courses")
+def get_all_courses(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
+    """Get all courses in the system"""
+    courses = db.query(Course).order_by(Course.created_at.desc()).all()
+    
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "code": c.code,
+            "professor_name": c.professor.name,
+            "professor_email": c.professor.email,
+            "student_count": len(c.students),
+            "session_count": len(c.sessions),
+            "created_at": c.created_at.isoformat()
+        }
+        for c in courses
+    ]
+
+@app.delete("/moderator/user/{user_id}")
+def delete_user_moderator(
+    user_id: int,
+    admin: User = Depends(verify_super_admin),
+    db: Session = Depends(get_db)
+):
+    """Delete any user (except super admin)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Prevent deleting yourself
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    
+    # Delete related data
+    if user.role == "student":
+        # Remove from all courses
+        user.enrolled_courses.clear()
+        # Delete attendance records
+        db.query(Attendance).filter(Attendance.student_id == user.id).delete()
+    elif user.role == "professor":
+        # Delete all courses taught
+        courses = db.query(Course).filter(Course.professor_id == user.id).all()
+        for course in courses:
+            # Delete sessions and attendance for these courses
+            sessions = db.query(Session).filter(Session.course_id == course.id).all()
+            for session in sessions:
+                db.query(Attendance).filter(Attendance.session_id == session.id).delete()
+            db.query(Session).filter(Session.course_id == course.id).delete()
+        db.query(Course).filter(Course.professor_id == user.id).delete()
+    
+    # Delete the user
+    db.delete(user)
+    db.commit()
+    
+    return {"message": f"User {user.name} deleted successfully"}
+
+@app.delete("/moderator/course/{course_id}")
+def delete_course_moderator(
+    course_id: int,
+    admin: User = Depends(verify_super_admin),
+    db: Session = Depends(get_db)
+):
+    """Delete any course"""
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Delete sessions and attendance
+    sessions = db.query(Session).filter(Session.course_id == course_id).all()
+    for session in sessions:
+        db.query(Attendance).filter(Attendance.session_id == session.id).delete()
+    db.query(Session).filter(Session.course_id == course_id).delete()
+    
+    # Remove all student enrollments
+    course.students.clear()
+    
+    # Delete course
+    db.delete(course)
+    db.commit()
+    
+    return {"message": f"Course {course.name} deleted successfully"}
+
+@app.post("/moderator/make-professor/{user_id}")
+def promote_to_professor(
+    user_id: int,
+    admin: User = Depends(verify_super_admin),
+    db: Session = Depends(get_db)
+):
+    """Promote a student to professor"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user.role == "professor":
+        raise HTTPException(status_code=400, detail="User is already a professor")
+    
+    # Change role
+    user.role = "professor"
+    # Clear student-specific data
+    user.student_id = None
+    user.face_embedding = None
+    # Remove from all courses
+    user.enrolled_courses.clear()
+    # Delete attendance records
+    db.query(Attendance).filter(Attendance.student_id == user.id).delete()
+    
+    db.commit()
+    
+    return {"message": f"{user.name} promoted to professor"}
+
+@app.get("/moderator/attendance/all")
+def get_all_attendance(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
+    """Get all attendance records in the system"""
+    records = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(100).all()
+    
+    return [
+        {
+            "id": r.id,
+            "student_name": r.student.name,
+            "student_id": r.student.student_id,
+            "course_name": r.session.course.name,
+            "professor_name": r.session.course.professor.name,
+            "timestamp": r.timestamp.isoformat(),
+            "status": r.status,
+            "confidence": r.confidence
+        }
+        for r in records
+    ]
+
+@app.post("/moderator/cleanup")
+def cleanup_system(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
+    """Clean up test data (use with caution!)"""
+    # Delete all attendance records
+    attendance_count = db.query(Attendance).count()
+    db.query(Attendance).delete()
+    
+    # Delete all sessions
+    session_count = db.query(Session).count()
+    db.query(Session).delete()
+    
+    # Unenroll all students
+    students = db.query(User).filter(User.role == 'student').all()
+    for student in students:
+        student.enrolled_courses.clear()
+    
+    db.commit()
+    
+    return {
+        "message": "System cleaned up",
+        "deleted_attendance": attendance_count,
+        "deleted_sessions": session_count
     }
 
 # ============================
