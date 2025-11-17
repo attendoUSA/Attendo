@@ -26,9 +26,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from google.cloud.sql.connector import Connector
 import pymysql
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 ET = ZoneInfo("America/New_York")
 # ============= CONFIGURATION =============
@@ -47,32 +44,36 @@ FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.93"))  # stric
 DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
 
 # =======================
-# Email (SMTP) – Jenish note
+# Email (Resend API)
 # =======================
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_FROM = os.getenv("EMAIL_FROM", EMAIL_USER)
+import resend
+
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "Attendo <onboarding@resend.dev>")
 
 def send_email(to_email: str, subject: str, message: str):
     """
-    (Jenish note) Helper to send simple text emails via Gmail SMTP.
-    Uses the credentials from .env (EMAIL_USER, EMAIL_PASS, etc.).
+    Send email using Resend API (works on Render free tier)
     """
-    if not EMAIL_USER or not EMAIL_PASS:
-        # If env vars are missing, fail loudly so Jenish sees it in logs
-        raise RuntimeError("SMTP not configured: missing EMAIL_USER or EMAIL_PASS")
-
-    msg = MIMEText(message)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = to_email
-
-    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-        server.starttls()
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.send_message(msg)
+    if not RESEND_API_KEY:
+        raise RuntimeError("RESEND_API_KEY not configured")
+    
+    resend.api_key = RESEND_API_KEY
+    
+    try:
+        params = {
+            "from": EMAIL_FROM,
+            "to": [to_email],
+            "subject": subject,
+            "text": message,
+        }
+        
+        email = resend.Emails.send(params)
+        print(f"[Email Success] Sent to {to_email}")
+        return email
+    except Exception as e:
+        print(f"[Email Error] Failed to send: {e}")
+        raise
 
 # ============= DATABASE SETUP =============
 Base = declarative_base()
