@@ -10,7 +10,7 @@
     <header>
         <nav>
             <div class="header-brand">
-                <img src="logo.png" class="header-logo" alt="Attendo logo"/>
+                <img src="logo.png" class="header-logo" alt="Attendo logo" />
                 <div class="logo">Attendo</div>
             </div>
             <button class="menu-toggle" id="menuToggle">
@@ -27,13 +27,13 @@
                 <li><a href="social.html">Social</a></li>
             </ul>
             <button class="theme-toggle" id="themeToggle" title="Toggle theme">
-                <span class="theme-icon">🌙</span>
+                <span class="theme-icon">ðŸŒ™</span>
             </button>
         </nav>
     </header>
 
     <main>
-        <section class="content fade-up">
+        <section class="content">
             <h1>Contact Us</h1>
             <p>We'd love to hear from you! Whether you're a professor, student, or organization, reach out for questions or support.</p>
 
@@ -58,31 +58,32 @@
     </footer>
 
     <script>
-        // =========================
-        // Nav + theme handling
-        // =========================
+    document.addEventListener("DOMContentLoaded", () => {
+
         const menuToggle = document.getElementById('menuToggle');
         const navMenu = document.getElementById('navMenu');
-        
-        menuToggle.addEventListener('click', () => {
-            menuToggle.classList.toggle('active');
-            navMenu.classList.toggle('active');
-        });
-        
-        document.addEventListener('click', (e) => {
-            if (!menuToggle.contains(e.target) && !navMenu.contains(e.target)) {
-                menuToggle.classList.remove('active');
-                navMenu.classList.remove('active');
-            }
-        });
-        
-        navMenu.querySelectorAll('a').forEach(link => {
-            link.addEventListener('click', () => {
-                menuToggle.classList.remove('active');
-                navMenu.classList.remove('active');
+
+        if (menuToggle && navMenu) {
+            menuToggle.addEventListener('click', () => {
+                menuToggle.classList.toggle('active');
+                navMenu.classList.toggle('active');
             });
-        });
-        
+
+            document.addEventListener('click', (e) => {
+                if (!menuToggle.contains(e.target) && !navMenu.contains(e.target)) {
+                    menuToggle.classList.remove('active');
+                    navMenu.classList.remove('active');
+                }
+            });
+
+            navMenu.querySelectorAll('a').forEach(link => {
+                link.addEventListener('click', () => {
+                    menuToggle.classList.remove('active');
+                    navMenu.classList.remove('active');
+                });
+            });
+        }
+
         window.addEventListener("load", () => {
             document.body.classList.add("loaded");
             document.querySelectorAll(".fade-up").forEach(el => el.classList.add("visible"));
@@ -94,36 +95,37 @@
             else header.classList.remove("scrolled");
         });
 
+        function updateThemeIcon(theme) {
+            const icon = document.querySelector('#themeToggle .theme-icon');
+            if (icon) icon.textContent = theme === 'dark' ? 'ðŸŒ™' : 'â˜€ï¸';
+        }
+
         function initTheme() {
             const saved = localStorage.getItem('theme') || 'dark';
             document.documentElement.setAttribute('data-theme', saved);
             updateThemeIcon(saved);
         }
 
-        function updateThemeIcon(theme) {
-            const icon = document.querySelector('#themeToggle .theme-icon');
-            if (icon) icon.textContent = theme === 'dark' ? '🌙' : '☀️';
+        const themeToggle = document.getElementById('themeToggle');
+        if (themeToggle) {
+            themeToggle.addEventListener('click', () => {
+                const current = document.documentElement.getAttribute('data-theme');
+                const next = current === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                updateThemeIcon(next);
+            });
         }
-
-        document.getElementById('themeToggle').addEventListener('click', () => {
-            const current = document.documentElement.getAttribute('data-theme');
-            const next = current === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', next);
-            localStorage.setItem('theme', next);
-            updateThemeIcon(next);
-        });
 
         initTheme();
 
-        // =========================
-        // Contact form → backend
-        // =========================
         const contactForm = document.getElementById('contactForm');
         const contactStatus = document.getElementById('contactStatus');
 
+        if (!contactForm || !contactStatus) return;
+
         contactForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-
             contactStatus.textContent = "Sending your message...";
             contactStatus.style.color = "#ccc";
 
@@ -134,26 +136,24 @@
             };
 
             try {
-                const res = await fetch('http://127.0.0.1:8000/contact/send', {
+                const res = await fetch('https://jude.pythonanywhere.com/contact', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
                 });
 
-                if (!res.ok) {
-                    const data = await res.json().catch(() => ({}));
-                    throw new Error(data.detail || "Failed to send message");
-                }
+                if (!res.ok) throw new Error("Failed to send message");
 
                 contactStatus.textContent = "Message sent! We'll get back to you soon.";
-                contactStatus.style.color = "#4ade80"; // green-ish
+                contactStatus.style.color = "#4ade80";
                 contactForm.reset();
+
             } catch (err) {
-                console.error(err);
                 contactStatus.textContent = "Error sending message. Please try again.";
-                contactStatus.style.color = "#f97373"; // red-ish
+                contactStatus.style.color = "#f97373";
             }
         });
+    });
     </script>
 </body>
 </html>
