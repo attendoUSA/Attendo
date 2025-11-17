@@ -1090,10 +1090,10 @@ class ContactMessage(BaseModel):
 @app.post("/contact/send")
 def send_contact_message(data: ContactMessage):
     """
-    (Jenish note) Sends contact form message directly to attendo.notify@gmail.com
+    Sends contact form message to admin email
     """
-    admin_email = EMAIL_USER  # This will be attendo.notify@gmail.com
-
+    admin_email = os.getenv("ADMIN_EMAIL", "attendo.notify@gmail.com")
+   
     subject = f"New Contact Form Message from {data.name}"
     body = f"""
 Name: {data.name}
