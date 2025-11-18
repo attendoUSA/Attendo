@@ -804,7 +804,7 @@ async function loadFaceModels(){
 function faceOptions(){ return new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }); }
 async function ensureModels(){ if(!_faceModelsReady) await loadFaceModels(); }
 
-async function embeddingFromImageElement(imgEl){
+async function embeddingFromImageElement(img){
   await ensureModels();
   const det = await faceapi.detectSingleFace(imgEl, faceOptions()).withFaceLandmarks().withFaceDescriptor();
   if(!det) throw new Error('No face detected in the uploaded photo.');
