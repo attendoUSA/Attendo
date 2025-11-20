@@ -40,7 +40,7 @@ DB_NAME = os.getenv("DB_NAME", "face_attendance")
 INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME", "project:region:instance")
 
 # Face matching configuration
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.92"))  # stricter default
+FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.93"))  # stricter default
 DUPLICATE_FACE_THRESHOLD = float(os.getenv("DUPLICATE_FACE_THRESHOLD", "0.90"))  # detect same face on signup
 
 # Super Admin Configuration
