@@ -60,9 +60,9 @@ def send_email(to_email: str, subject: str, message: str):
     """
     if not RESEND_API_KEY:
         raise RuntimeError("RESEND_API_KEY not configured")
-    
+
     resend.api_key = RESEND_API_KEY
-    
+
     try:
         params = {
             "from": EMAIL_FROM,
@@ -70,7 +70,7 @@ def send_email(to_email: str, subject: str, message: str):
             "subject": subject,
             "text": message,
         }
-        
+
         email = resend.Emails.send(params)
         print(f"[Email Success] Sent to {to_email}")
         return email
@@ -116,7 +116,7 @@ enrollments = Table(
 
 class User(Base):
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
@@ -134,13 +134,13 @@ class User(Base):
 
 class Course(Base):
     __tablename__ = "courses"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     code = Column(String(20), unique=True, index=True, nullable=False)
     professor_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     created_at = Column(DateTime, default=datetime.now(ET))
-    
+
     # Relationships
     professor = relationship("User", back_populates="courses_taught")
     students = relationship("User", secondary=enrollments, back_populates="enrolled_courses")
@@ -148,7 +148,7 @@ class Course(Base):
 
 class Session(Base):
     __tablename__ = "sessions"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey('courses.id'), nullable=False)
     start_time = Column(DateTime(timezone=True), default=lambda: datetime.now(ET))  # Add timezone=True
@@ -156,23 +156,23 @@ class Session(Base):
     late_after_minutes = Column(Integer, default=5)
     absent_after_minutes = Column(Integer, default=15)
     is_active = Column(Boolean, default=True)
-    
+
     # Relationships
     course = relationship("Course", back_populates="sessions")
     attendance_records = relationship("Attendance", back_populates="session")
 
 class Attendance(Base):
     __tablename__ = "attendance"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
     student_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(ET))  # Add timezone=True
     status = Column(String(20), nullable=False)
     confidence = Column(Float, nullable=True)
-    
+
     # ... rest of the code
-    
+
     # Relationships
     session = relationship("Session", back_populates="attendance_records")
     student = relationship("User", back_populates="attendance_records")
@@ -316,10 +316,10 @@ def verify_super_admin(token_data: dict = Depends(verify_token), db: Session = D
     user = db.query(User).filter(User.id == token_data["user_id"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if not is_super_admin(user.email):
         raise HTTPException(status_code=403, detail="Super admin access required")
-    
+
     return user
 
 # ============= ROUTES =============
@@ -334,32 +334,38 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == user_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     # Guard: students must provide a face
     if user_data.role == "student" and (not user_data.face_embedding or len(user_data.face_embedding) == 0):
         raise HTTPException(status_code=400, detail="Face photo/embedding required for student accounts")
-    
+
     # Validate student ID for students
     student_id = None
     if user_data.role == "student":
         if not user_data.student_id:
             raise HTTPException(status_code=400, detail="Student ID is required for student accounts")
-        
+
         # Validate format (8 digits)
         if not user_data.student_id.isdigit() or len(user_data.student_id) != 8:
             raise HTTPException(status_code=400, detail="Student ID must be exactly 8 digits")
-        
+
         # Check if student ID is already taken
         existing_id = db.query(User).filter(User.student_id == user_data.student_id).first()
         if existing_id:
             raise HTTPException(status_code=400, detail="This Student ID is already registered")
-        
+
         student_id = user_data.student_id
 
     # Hash password
     hashed = pwd_context.hash(user_data.password[:72])
-     
-    # Duplicate-face check
+
+    # Prepare face embedding (L2-normalized) and block duplicates
+    face_str = None
+    norm_emb = None
+    if user_data.face_embedding:
+        norm_emb = l2_normalize(user_data.face_embedding)
+
+         # Duplicate-face check
         existing_with_face = db.query(User).filter(User.face_embedding.isnot(None)).all()
         for u in existing_with_face:
             try:
@@ -374,8 +380,8 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
                 )
 
         face_str = json.dumps(norm_emb)
-   
-# Create user
+    
+    # Create user
     user = User(
         name=user_data.name,
         email=user_data.email,
@@ -408,7 +414,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
 
     # Create token
     token = create_access_token({"user_id": user.id, "role": user.role, "student_id": student_id})
-    
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -423,9 +429,9 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == credentials.email).first()
     if not user or not pwd_context.verify(credentials.password[:72], user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
-    
+
     token = create_access_token({"user_id": user.id, "role": user.role, "student_id": user.student_id})
-    
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -440,7 +446,7 @@ def get_user_info(token_data: dict = Depends(verify_token), db: Session = Depend
     user = db.query(User).filter(User.id == token_data["user_id"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     response = {
         "id": user.id,
         "name": user.name,
@@ -449,12 +455,12 @@ def get_user_info(token_data: dict = Depends(verify_token), db: Session = Depend
         "student_id": user.student_id,
         "is_super_admin": is_super_admin(user.email)
     }
-    
+
     # Add edit status for students
     if user.role == "student":
         response["student_id_edited"] = user.student_id_edited
         response["can_edit_student_id"] = not user.student_id_edited
-    
+
     return response
 
 @app.put("/user/student-id")
@@ -467,23 +473,23 @@ def update_student_id(
     user = db.query(User).filter(User.id == token_data["user_id"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Only students can update their student ID
     if user.role != "student":
         raise HTTPException(status_code=403, detail="Only students have student IDs")
-    
+
     # Check if already edited
     if user.student_id_edited:
         raise HTTPException(
             status_code=403,
             detail="Student ID has already been edited once. No further changes allowed."
         )
-    
+
     # Validate new student ID
     new_id = update_data.new_student_id.strip()
     if not new_id.isdigit() or len(new_id) != 8:
         raise HTTPException(status_code=400, detail="Student ID must be exactly 8 digits")
-    
+
     # Check if new ID is already taken by another user
     existing = db.query(User).filter(
         User.student_id == new_id,
@@ -491,12 +497,12 @@ def update_student_id(
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="This Student ID is already registered")
-    
+
     # Update student ID and mark as edited
     user.student_id = new_id
     user.student_id_edited = True
     db.commit()
-    
+
     return {
         "message": "Student ID updated successfully",
         "student_id": new_id,
@@ -557,9 +563,9 @@ def get_my_taught_courses(token_data: dict = Depends(verify_token), db: Session 
     """Get courses taught by the current professor"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can access this endpoint")
-    
+
     courses = db.query(Course).filter(Course.professor_id == token_data["user_id"]).all()
-    
+
     return [
         {
             "id": c.id,
@@ -575,20 +581,20 @@ def enroll_in_course(enroll_data: CourseEnroll, token_data: dict = Depends(verif
     """Enroll in a course using join code"""
     if token_data["role"] != "student":
         raise HTTPException(status_code=403, detail="Only students can enroll in courses")
-    
+
     course = db.query(Course).filter(Course.code == enroll_data.join_code.upper()).first()
     if not course:
         raise HTTPException(status_code=404, detail="Invalid join code")
-    
+
     student = db.query(User).filter(User.id == token_data["user_id"]).first()
-    
+
     # Check if already enrolled
     if student in course.students:
         raise HTTPException(status_code=400, detail="Already enrolled in this course")
-    
+
     course.students.append(student)
     db.commit()
-    
+
     return {"course_id": course.id, "course_name": course.name}
 
 @app.get("/courses/enrolled")
@@ -596,9 +602,9 @@ def get_enrolled_courses(token_data: dict = Depends(verify_token), db: Session =
     """Get courses the current student is enrolled in"""
     if token_data["role"] != "student":
         raise HTTPException(status_code=403, detail="Only students can access this endpoint")
-    
+
     student = db.query(User).filter(User.id == token_data["user_id"]).first()
-    
+
     return [
         {
             "id": c.id,
@@ -612,14 +618,14 @@ def get_course_roster(course_id: int, token_data: dict = Depends(verify_token), 
     """Get list of enrolled students with their IDs for a course (professors only)"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can access rosters")
-    
+
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    
+
     if course.professor_id != token_data["user_id"]:
         raise HTTPException(status_code=403, detail="Not authorized for this course")
-    
+
     return [
         {
             "id": s.id,
@@ -635,37 +641,37 @@ def delete_course(course_id: int, token_data: dict = Depends(verify_token), db: 
     """Delete a course and all related data (professors only)"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can delete courses")
-    
+
     # Find the course
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    
+
     # Verify ownership
     if course.professor_id != token_data["user_id"]:
         raise HTTPException(status_code=403, detail="Not authorized to delete this course")
-    
+
     # Get all sessions for this course
     sessions = db.query(Session).filter(Session.course_id == course_id).all()
     session_ids = [s.id for s in sessions]
-    
+
     # Delete all attendance records for these sessions
     if session_ids:
         db.query(Attendance).filter(Attendance.session_id.in_(session_ids)).delete(synchronize_session=False)
-    
+
     # Delete all sessions
     db.query(Session).filter(Session.course_id == course_id).delete(synchronize_session=False)
-    
+
     # Remove all student enrollments (many-to-many relationship)
     course.students.clear()
-    
+
     # Delete the course itself
     db.delete(course)
     db.commit()
-    
+
     return {"message": f"Course '{course.name}' and all related data deleted successfully"}
 
-    
+
 @app.post("/sessions/start")
 def start_session(session_data: SessionStart, token_data: dict = Depends(verify_token), db: Session = Depends(get_db)):
     """Start an attendance session (professors only)
@@ -673,12 +679,12 @@ def start_session(session_data: SessionStart, token_data: dict = Depends(verify_
     """
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can start sessions")
-    
+
     # Verify course ownership
     course = db.query(Course).filter(Course.id == session_data.course_id).first()
     if not course or course.professor_id != token_data["user_id"]:
         raise HTTPException(status_code=403, detail="Not authorized for this course")
-    
+
     # End any active sessions for this course
     db.query(Session).filter(
         Session.course_id == session_data.course_id,
@@ -686,7 +692,7 @@ def start_session(session_data: SessionStart, token_data: dict = Depends(verify_
     ).update(
         {"is_active": False, "end_time": datetime.now(ET)}
     )
-    
+
     # Create new session
     session = Session(
         course_id=session_data.course_id,
@@ -708,27 +714,27 @@ def stop_session(session_id: int, token_data: dict = Depends(verify_token), db: 
     """Stop an attendance session (professors only)"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can stop sessions")
-    
+
     session = db.query(Session).filter(Session.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     # Verify course ownership
     course = db.query(Course).filter(Course.id == session.course_id).first()
     if course.professor_id != token_data["user_id"]:
         raise HTTPException(status_code=403, detail="Not authorized for this session")
-    
+
     # End session
     session.is_active = False
     session.end_time = datetime.now(ET)
-    
+
     # Mark absent students
     enrolled_students = course.students
     checked_in_students = db.query(Attendance.student_id).filter(
         Attendance.session_id == session_id
     ).all()
     checked_in_ids = [s[0] for s in checked_in_students]
-    
+
     for student in enrolled_students:
         if student.id not in checked_in_ids:
             attendance = Attendance(
@@ -738,7 +744,7 @@ def stop_session(session_id: int, token_data: dict = Depends(verify_token), db: 
                 timestamp=datetime.now(ET)  # explicit timestamp
             )
             db.add(attendance)
-    
+
     db.commit()
 
     # ==========================
@@ -808,7 +814,7 @@ def get_active_session(course_id: int, db: Session = Depends(get_db)):
         Session.course_id == course_id, 
         Session.is_active == True
     ).first()
-    
+
     if session:
         return {"active": True, "session_id": session.id}
     return {"active": False}
@@ -821,20 +827,20 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
         Session.course_id == checkin_data.course_id,
         Session.is_active == True
     ).first()
-    
+
     if not session:
         raise HTTPException(status_code=400, detail="No active session for this course")
-    
+
     # Find student by student ID
     student = db.query(User).filter(User.student_id == checkin_data.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Invalid student ID")
-    
+
     # Check if student is enrolled in the course
     course = db.query(Course).filter(Course.id == checkin_data.course_id).first()
     if student not in course.students:
         raise HTTPException(status_code=403, detail="Student not enrolled in this course")
-    
+
     # Check if already checked in
     existing = db.query(Attendance).filter(
         Attendance.session_id == session.id,
@@ -842,18 +848,18 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Already checked in")
-    
+
     # Verify face
     if not student.face_embedding:
         raise HTTPException(status_code=400, detail="No face data on file for this student")
-    
+
     stored_embedding = json.loads(student.face_embedding)
     normalized_input = l2_normalize(checkin_data.face_embedding)
     similarity = cosine_similarity(normalized_input, stored_embedding)
-    
+
     if similarity < FACE_MATCH_THRESHOLD:
         raise HTTPException(status_code=403, detail=f"Face verification failed (confidence: {similarity:.2%})")
-    
+
     # Determine status based on time
     start_time = session.start_time if session.start_time.tzinfo else session.start_time.replace(tzinfo=ET)
     elapsed_minutes = (datetime.now(ET) - start_time).total_seconds() / 60
@@ -862,7 +868,7 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
         status = "late"
     if elapsed_minutes > session.absent_after_minutes:
         status = "absent"
-    
+
     # Record attendance
     attendance = Attendance(
         session_id=session.id,
@@ -872,7 +878,7 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
     )
     db.add(attendance)
     db.commit()
-    
+
     return {
         "student_name": student.name,
         "status": status,
@@ -884,22 +890,22 @@ def checkin(checkin_data: CheckIn, token_data: dict = Depends(verify_token), db:
     """Original check-in endpoint (kept for backward compatibility)"""
     if token_data["role"] != "student":
         raise HTTPException(status_code=403, detail="Only students can check in")
-    
+
     session = db.query(Session).filter(
         Session.course_id == checkin_data.course_id,
         Session.is_active == True
     ).first()
-    
+
     if not session:
         raise HTTPException(status_code=400, detail="No active session for this course")
-    
+
     student = db.query(User).filter(User.id == token_data["user_id"]).first()
-    
+
     # Check enrollment
     course = db.query(Course).filter(Course.id == checkin_data.course_id).first()
     if student not in course.students:
         raise HTTPException(status_code=403, detail="Not enrolled in this course")
-    
+
     # Check if already checked in
     existing = db.query(Attendance).filter(
         Attendance.session_id == session.id,
@@ -907,15 +913,15 @@ def checkin(checkin_data: CheckIn, token_data: dict = Depends(verify_token), db:
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Already checked in")
-    
+
     # Verify face
     stored_embedding = json.loads(student.face_embedding)
     normalized_input = l2_normalize(checkin_data.face_embedding)
     similarity = cosine_similarity(normalized_input, stored_embedding)
-    
+
     if similarity < FACE_MATCH_THRESHOLD:
         raise HTTPException(status_code=403, detail=f"Face verification failed")
-    
+
     # Determine status
     start_time = session.start_time if session.start_time.tzinfo else session.start_time.replace(tzinfo=ET)
     elapsed_minutes = (datetime.now(ET) - start_time).total_seconds() / 60
@@ -924,7 +930,7 @@ def checkin(checkin_data: CheckIn, token_data: dict = Depends(verify_token), db:
         status = "late"
     if elapsed_minutes > session.absent_after_minutes:
         status = "absent"
-    
+
     attendance = Attendance(
         session_id=session.id,
         student_id=student.id,
@@ -933,7 +939,7 @@ def checkin(checkin_data: CheckIn, token_data: dict = Depends(verify_token), db:
     )
     db.add(attendance)
     db.commit()
-    
+
     return {"status": status}
 
 @app.get("/attendance/live/{course_id}")
@@ -941,19 +947,19 @@ def get_live_attendance(course_id: int, token_data: dict = Depends(verify_token)
     """Get live attendance for active session"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can view live attendance")
-    
+
     # Get active session
     session = db.query(Session).filter(
         Session.course_id == course_id,
         Session.is_active == True
     ).first()
-    
+
     if not session:
         return []
-    
+
     # Get attendance records
     records = db.query(Attendance).filter(Attendance.session_id == session.id).all()
-    
+
     return [
         {
             "student_name": r.student.name,
@@ -969,18 +975,18 @@ def get_attendance_history(token_data: dict = Depends(verify_token), db: Session
     """Get attendance history for professor's courses"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can view attendance history")
-    
+
     # Get all courses taught by this professor
     courses = db.query(Course).filter(Course.professor_id == token_data["user_id"]).all()
     course_ids = [c.id for c in courses]
-    
+
     # Get all sessions for these courses
     sessions = db.query(Session).filter(Session.course_id.in_(course_ids)).all()
     session_ids = [s.id for s in sessions]
-    
+
     # Get all attendance records
     records = db.query(Attendance).filter(Attendance.session_id.in_(session_ids)).order_by(Attendance.timestamp.desc()).all()
-    
+
     return [
         {
             "id": r.id,
@@ -999,9 +1005,9 @@ def get_my_attendance_history(token_data: dict = Depends(verify_token), db: Sess
     """Get attendance history for a student"""
     if token_data["role"] != "student":
         raise HTTPException(status_code=403, detail="Only students can view their attendance")
-    
+
     records = db.query(Attendance).filter(Attendance.student_id == token_data["user_id"]).order_by(Attendance.timestamp.desc()).all()
-    
+
     return [
         {
             "id": r.id,
@@ -1018,21 +1024,21 @@ def delete_student_data(student_id: str, token_data: dict = Depends(verify_token
     """Delete student enrollments and face data (professors only)"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can delete student data")
-    
+
     # Find student by student ID
     student = db.query(User).filter(User.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     # Get professor's courses
     professor_courses = db.query(Course).filter(Course.professor_id == token_data["user_id"]).all()
     professor_course_ids = [c.id for c in professor_courses]
-    
+
     # Remove student from professor's courses only
     for course in professor_courses:
         if student in course.students:
             course.students.remove(student)
-    
+
     # Delete attendance records for professor's courses
     sessions_to_check = db.query(Session).filter(Session.course_id.in_(professor_course_ids)).all()
     session_ids = [s.id for s in sessions_to_check]
@@ -1040,14 +1046,14 @@ def delete_student_data(student_id: str, token_data: dict = Depends(verify_token
         Attendance.student_id == student.id,
         Attendance.session_id.in_(session_ids)
     ).delete()
-    
+
     # Clear face embedding (optional - only if professor owns ALL courses the student is in)
     # For safety, we'll only clear if the student is not enrolled in any other courses
     if not student.enrolled_courses:
         student.face_embedding = None
-    
+
     db.commit()
-    
+
     return {"message": f"Student {student.name} removed from your courses"}
 
 @app.delete("/students/all/data")
@@ -1055,29 +1061,29 @@ def delete_all_students_data(token_data: dict = Depends(verify_token), db: Sessi
     """Delete ALL students' face embeddings and course enrollments (professors only)"""
     if token_data["role"] != "professor":
         raise HTTPException(status_code=403, detail="Only professors can delete student data")
-    
+
     # Get all students (users with role='student')
     all_students = db.query(User).filter(User.role == 'student').all()
-    
+
     if not all_students:
         return {"message": "No students found in the system", "deleted_count": 0}
-    
+
     deleted_count = 0
-    
+
     for student in all_students:
         # Clear face embedding
         if student.face_embedding:
             student.face_embedding = None
             deleted_count += 1
-        
+
         # Remove from all courses
         student.enrolled_courses.clear()
-        
+
         # Delete all attendance records for this student
         db.query(Attendance).filter(Attendance.student_id == student.id).delete()
-    
+
     db.commit()
-    
+
     return {
         "message": f"Successfully deleted face embeddings and enrollments for all students",
         "deleted_count": deleted_count
@@ -1096,10 +1102,10 @@ def get_system_stats(admin: User = Depends(verify_super_admin), db: Session = De
     total_courses = db.query(Course).count()
     total_sessions = db.query(Session).count()
     total_attendance = db.query(Attendance).count()
-    
+
     # Get recent registrations
     recent_users = db.query(User).order_by(User.created_at.desc()).limit(5).all()
-    
+
     return {
         "total_users": total_users,
         "total_students": total_students,
@@ -1123,7 +1129,7 @@ def get_system_stats(admin: User = Depends(verify_super_admin), db: Session = De
 def get_all_users(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
     """Get all users in the system"""
     users = db.query(User).order_by(User.created_at.desc()).all()
-    
+
     return [
         {
             "id": u.id,
@@ -1141,7 +1147,7 @@ def get_all_users(admin: User = Depends(verify_super_admin), db: Session = Depen
 def get_all_courses(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
     """Get all courses in the system"""
     courses = db.query(Course).order_by(Course.created_at.desc()).all()
-    
+
     return [
         {
             "id": c.id,
@@ -1166,11 +1172,11 @@ def delete_user_moderator(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Prevent deleting yourself
     if user.id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    
+
     # Delete related data
     if user.role == "student":
         # Remove from all courses
@@ -1187,11 +1193,11 @@ def delete_user_moderator(
                 db.query(Attendance).filter(Attendance.session_id == session.id).delete()
             db.query(Session).filter(Session.course_id == course.id).delete()
         db.query(Course).filter(Course.professor_id == user.id).delete()
-    
+
     # Delete the user
     db.delete(user)
     db.commit()
-    
+
     return {"message": f"User {user.name} deleted successfully"}
 
 @app.delete("/moderator/course/{course_id}")
@@ -1204,20 +1210,20 @@ def delete_course_moderator(
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    
+
     # Delete sessions and attendance
     sessions = db.query(Session).filter(Session.course_id == course_id).all()
     for session in sessions:
         db.query(Attendance).filter(Attendance.session_id == session.id).delete()
     db.query(Session).filter(Session.course_id == course_id).delete()
-    
+
     # Remove all student enrollments
     course.students.clear()
-    
+
     # Delete course
     db.delete(course)
     db.commit()
-    
+
     return {"message": f"Course {course.name} deleted successfully"}
 
 @app.post("/moderator/make-professor/{user_id}")
@@ -1230,10 +1236,10 @@ def promote_to_professor(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if user.role == "professor":
         raise HTTPException(status_code=400, detail="User is already a professor")
-    
+
     # Change role
     user.role = "professor"
     # Clear student-specific data
@@ -1243,16 +1249,16 @@ def promote_to_professor(
     user.enrolled_courses.clear()
     # Delete attendance records
     db.query(Attendance).filter(Attendance.student_id == user.id).delete()
-    
+
     db.commit()
-    
+
     return {"message": f"{user.name} promoted to professor"}
 
 @app.get("/moderator/attendance/all")
 def get_all_attendance(admin: User = Depends(verify_super_admin), db: Session = Depends(get_db)):
     """Get all attendance records in the system"""
     records = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(100).all()
-    
+
     return [
         {
             "id": r.id,
@@ -1273,18 +1279,18 @@ def cleanup_system(admin: User = Depends(verify_super_admin), db: Session = Depe
     # Delete all attendance records
     attendance_count = db.query(Attendance).count()
     db.query(Attendance).delete()
-    
+
     # Delete all sessions
     session_count = db.query(Session).count()
     db.query(Session).delete()
-    
+
     # Unenroll all students
     students = db.query(User).filter(User.role == 'student').all()
     for student in students:
         student.enrolled_courses.clear()
-    
+
     db.commit()
-    
+
     return {
         "message": "System cleaned up",
         "deleted_attendance": attendance_count,
@@ -1307,7 +1313,7 @@ def send_contact_message(data: ContactMessage):
     Sends contact form message to admin email
     """
     admin_email = os.getenv("ADMIN_EMAIL", "attendo.notify@gmail.com")
-   
+
     subject = f"New Contact Form Message from {data.name}"
     body = f"""
 Name: {data.name}
