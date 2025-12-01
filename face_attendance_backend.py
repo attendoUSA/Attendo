@@ -844,7 +844,7 @@ def checkin_with_student_id(checkin_data: CheckInWithStudentId, db: Session = De
     similarity = cosine_similarity(normalized_input, stored_embedding)
 
     if similarity < FACE_MATCH_THRESHOLD:
-        raise HTTPException(status_code=403, detail=f"Face verification failed (confidence: {similarity:.2%})")
+        raise HTTPException(status_code=403, detail=f"FACE VERIFICATION FAILED")
 
     # Determine status based on time
     start_time = session.start_time if session.start_time.tzinfo else session.start_time.replace(tzinfo=ET)
@@ -898,7 +898,7 @@ def checkin(checkin_data: CheckIn, token_data: dict = Depends(verify_token), db:
         Attendance.student_id == student.id
     ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Already checked in")
+        raise HTTPException(status_code=400, detail="Already checked in!!")
 
     # Verify face
     stored_embedding = json.loads(student.face_embedding)
@@ -906,7 +906,7 @@ def checkin(checkin_data: CheckIn, token_data: dict = Depends(verify_token), db:
     similarity = cosine_similarity(normalized_input, stored_embedding)
 
     if similarity < FACE_MATCH_THRESHOLD:
-        raise HTTPException(status_code=403, detail=f"Face verification failed")
+        raise HTTPException(status_code=403, detail=f"FACE VERIFICATION FAILED")
 
     # Determine status
     start_time = session.start_time if session.start_time.tzinfo else session.start_time.replace(tzinfo=ET)
