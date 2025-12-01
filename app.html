@@ -540,7 +540,6 @@
                                     <th>Professor</th>
                                     <th>Time</th>
                                     <th>Status</th>
-                                    <th>Confidence</th>
                                 </tr>
                             </thead>
                             <tbody id="modAttendanceRows"></tbody>
@@ -1899,7 +1898,6 @@ async function loadModAttendance() {
                 <td>${r.professor_name}</td>
                 <td>${time}</td>
                 <td><span class="badge">${r.status}</span></td>
-                <td>${(r.confidence * 100).toFixed(1)}%</td>
             `;
             tbody.appendChild(tr);
         });
