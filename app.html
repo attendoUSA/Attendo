@@ -558,20 +558,18 @@
     </main>
 
     <!-- Check-In Console Modal (for Professors) -->
+    <!-- Check-In Console Modal (for Professors) -->
     <div id="checkinModal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Check-In Console</h2>
+                <h2>Automatic Check-In Console</h2>
                 <button class="modal-close" id="btnCloseModal">×</button>
             </div>
             <div class="modal-body">
                 <h3 id="modalCourseName">Course Name</h3>
-                <p class="small">Session is active. Students can now check in.</p>
+                <p class="small">🤖 Automatic face detection is active. Students will be checked in as they appear on camera.</p>
 
                 <div class="checkin-form">
-                    <label>Student ID</label>
-                    <input class="input" id="modalStudentId" placeholder="Enter 8-digit ID" maxlength="8" />
-
                     <div class="video-container">
                         <video id="modalVideo" autoplay muted playsinline></video>
                         <div id="videoOverlay" class="video-overlay hidden">
@@ -580,8 +578,17 @@
                         </div>
                     </div>
 
-                    <button class="btn-primary" id="btnModalCheckIn">Check In Student</button>
                     <p class="checkin-status" id="modalCheckStatus"></p>
+                    
+                    <!-- Manual Override Section (Collapsible) -->
+                    <details style="margin-top: 1rem;">
+                        <summary style="cursor: pointer; color: var(--text-secondary);">Manual Check-In (Backup)</summary>
+                        <div style="margin-top: 1rem;">
+                            <label>Student ID</label>
+                            <input class="input" id="modalStudentId" placeholder="Enter 8-digit ID" maxlength="8" />
+                            <button class="btn-secondary mt-2" id="btnModalCheckIn">Manual Check In</button>
+                        </div>
+                    </details>
                 </div>
 
                 <div class="session-stats mt-3">
@@ -605,7 +612,7 @@
                 <div class="recent-checkins mt-3">
                     <h4>Recent Check-Ins</h4>
                     <div id="recentCheckinsDisplay">
-                        <p class="small">No check-ins yet</p>
+                        <p class="small">Waiting for faces...</p>
                     </div>
                 </div>
             </div>
@@ -1170,13 +1177,15 @@ $('#btnStartCheckIn').onclick = async () => {
         modalVideoStream = $('#modalVideo').srcObject;
 
         startLiveAttendancePolling();
-        showNotification('Session Started', 'Check-in session is now active', 'success');
+        startAutoCheckIn(); // Start automatic face detection
+        showNotification('Session Started', 'Automatic face detection enabled', 'success');
     } catch (e) {
         showNotification('Error', e.message || 'Failed to start session', 'error');
     }
 };
 
 $('#btnCloseModal').onclick = () => {
+    stopAutoCheckIn();
     stopModalCamera();
     show('#checkinModal', false);
 };
@@ -1194,6 +1203,7 @@ $('#btnStopSession').onclick = async () => {
 
     try {
         await api(`/sessions/stop/${activeSessionId}`, 'POST');
+        stopAutoCheckIn();
         stopModalCamera();
         show('#checkinModal', false);
         activeSessionId = null;
@@ -1211,8 +1221,83 @@ function stopModalCamera() {
         modalVideoStream.getTracks().forEach(track => track.stop());
         modalVideoStream = null;
     }
+    recentlyCheckedIn.clear();
 }
 
+// Automatic face detection and check-in
+let autoCheckInInterval = null;
+let recentlyCheckedIn = new Set(); // Track recently checked students
+
+async function startAutoCheckIn() {
+    if (autoCheckInInterval) return; // Already running
+    
+    autoCheckInInterval = setInterval(async () => {
+        try {
+            const videoEl = $('#modalVideo');
+            if (!videoEl || !videoEl.srcObject) return;
+            
+            // Get face embedding from video
+            const embedding = await embeddingFromVideoElement(videoEl);
+            
+            // Get all enrolled students for this course
+            const roster = await api(`/courses/${activeCourseId}/roster`, 'GET');
+            
+            // Try to match face with enrolled students
+            let bestMatch = null;
+            let bestSimilarity = 0;
+            
+            for (const student of roster) {
+                // Skip if already checked in this session
+                if (recentlyCheckedIn.has(student.student_id)) continue;
+                
+                try {
+                    // Try checking in with this student's ID
+                    const result = await api('/checkin/with-id', 'POST', {
+                        course_id: activeCourseId,
+                        student_id: student.student_id,
+                        face_embedding: embedding
+                    });
+                    
+                    // If successful, this is our match
+                    bestMatch = result;
+                    recentlyCheckedIn.add(student.student_id);
+                    break;
+                } catch (e) {
+                    // Face didn't match this student, continue
+                    continue;
+                }
+            }
+            
+            if (bestMatch) {
+                $('#modalCheckStatus').textContent = `✓ ${bestMatch.student_name} - ${bestMatch.status.toUpperCase()}`;
+                $('#modalCheckStatus').className = 'checkin-status success';
+                
+                addRecentCheckin(bestMatch.student_name, bestMatch.status);
+                updateSessionStats();
+                refreshLiveAttendance();
+                showNotification('Auto Check-In', `${bestMatch.student_name} marked ${bestMatch.status}`, 'success');
+                
+                // Remove from recently checked after 10 seconds to prevent duplicates
+                setTimeout(() => {
+                    recentlyCheckedIn.delete(bestMatch.student_id);
+                }, 10000);
+            }
+        } catch (e) {
+            // Silently continue - likely no face detected
+            console.log('Auto check-in scan:', e.message);
+        }
+    }, 2000); // Check every 2 seconds
+}
+
+function stopAutoCheckIn() {
+    if (autoCheckInInterval) {
+        clearInterval(autoCheckInInterval);
+        autoCheckInInterval = null;
+    }
+    recentlyCheckedIn.clear();
+}
+
+// Manual check-in button (kept as backup option)
 $('#btnModalCheckIn').onclick = async () => {
     const studentIdInput = $('#modalStudentId').value.trim();
     if (!studentIdInput) {
