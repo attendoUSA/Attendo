@@ -818,7 +818,13 @@ async function embeddingFromImageElement(imgEl){
 }
 
 async function setupCamera(videoEl){
-  const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' } });
+  const stream = await navigator.mediaDevices.getUserMedia({ 
+    video: { 
+      facingMode: 'user',
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    } 
+  });
   videoEl.srcObject = stream;
   await new Promise(res => videoEl.onloadedmetadata = res);
   return stream;
