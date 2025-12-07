@@ -1193,6 +1193,11 @@ $('#btnStartCheckIn').onclick = async () => {
 $('#btnCloseModal').onclick = () => {
     stopAutoCheckIn();
     stopModalCamera();
+    
+    // Reset the recent check-ins display
+    $('#recentCheckinsDisplay').innerHTML = '<p class="small">Waiting for faces...</p>';
+    $('#modalCheckStatus').textContent = '';
+    
     show('#checkinModal', false);
 };
 
@@ -1211,6 +1216,11 @@ $('#btnStopSession').onclick = async () => {
         await api(`/sessions/stop/${activeSessionId}`, 'POST');
         stopAutoCheckIn();
         stopModalCamera();
+        
+        // Reset the recent check-ins display
+        $('#recentCheckinsDisplay').innerHTML = '<p class="small">Waiting for faces...</p>';
+        $('#modalCheckStatus').textContent = '';
+        
         show('#checkinModal', false);
         activeSessionId = null;
         activeCourseId = null;
@@ -1221,7 +1231,6 @@ $('#btnStopSession').onclick = async () => {
         showNotification('Error', e.message || 'Failed to stop session', 'error');
     }
 };
-
 function stopModalCamera() {
     if (modalVideoStream) {
         modalVideoStream.getTracks().forEach(track => track.stop());
@@ -1236,6 +1245,12 @@ let recentlyCheckedIn = new Set(); // Track recently checked students
 
 async function startAutoCheckIn() {
     if (autoCheckInInterval) return; // Already running
+    
+    // Clear any existing check-ins from previous sessions
+    recentlyCheckedIn.clear();
+    
+    // Wait 3 seconds before starting to avoid immediate double check-in
+    await new Promise(resolve => setTimeout(resolve, 3000));
     
     autoCheckInInterval = setInterval(async () => {
         try {
